@@ -15,7 +15,7 @@ from model import *
 
 # <codecell>
 
-ds = BinaryAdditionDataset()
+ds = BinaryAdditionDataset(max_len=500, arg_high=8)
 
 test_split = 0.1
 test_len = int(len(ds) * test_split)
@@ -26,15 +26,13 @@ train_ds, test_ds = random_split(ds, [train_len, test_len])
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-
-
-# <codecell>
-### TRAINING
-n_epochs = 35
-
 model = BinaryAdditionLSTM(
     embedding_size=2,
     hidden_size=5).cuda()
+
+# <codecell>
+### TRAINING
+n_epochs = 100
 
 optimizer = Adam(model.parameters(), lr=3e-4)
 
@@ -59,8 +57,9 @@ for e in range(n_epochs):
 
     curr_loss = running_loss / running_length
     test_loss, test_acc = compute_test_loss(model, test_dl)
+    arith_acc = compute_arithmetic_acc(model, test_dl, ds)
 
-    print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   acc: {test_acc:.4f}')
+    print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc: {arith_acc:.4f}')
     losses['train'].append(curr_loss)
     losses['test'].append(test_loss)
     losses['acc'].append(test_acc)
@@ -100,7 +99,7 @@ def print_test_case(ds, model, args):
     print(f'Output: {pred_seq.tolist()}')
     print(f'Answer: {out_toks}')
 
-print_test_case(ds, model, [2, 3])
+print_test_case(ds, model, [2, 1])
 print_test_case(ds, model, [6, 7])
 print_test_case(ds, model, ['10', '01'])
 print_test_case(ds, model, [5, 25])
@@ -108,5 +107,8 @@ print_test_case(ds, model, [16, 16])
 
 # <codecell>
 model.save('save/mini')
+
+# <codecell>
+model.load('save/prototype')
 
 # %%

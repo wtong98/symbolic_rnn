@@ -46,7 +46,12 @@ class BinaryAdditionDataset(Dataset):
             str_toks = str_toks[:-1]
         
         str_args = ''.join(str_toks).split('+')
-        args = [int(str_a, 2) for str_a in str_args]
+        try:
+            args = [int(str_a, 2) for str_a in str_args]
+        except:
+            # print('invalid tokens: ', tokens)
+            return None
+
         if return_bin:
             return args, str_args
         else:
@@ -93,8 +98,8 @@ class BinaryAdditionLSTM(nn.Module):
             batch_first=True,
         )
         #TODO: is the extra readout needed?
-        self.output_layer = nn.Linear(self.hidden_size, self.embedding_size)
-        self.readout = nn.Linear(self.embedding_size, self.num_ops)
+        # self.output_layer = nn.Linear(self.hidden_size, self.embedding_size)
+        self.readout = nn.Linear(self.hidden_size, self.num_ops)
     
     def encode(self, input_seq):
         input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
@@ -107,8 +112,8 @@ class BinaryAdditionLSTM(nn.Module):
     def decode(self, input_seq, hidden, cell):
         input_emb = self.embedding(input_seq)
         dec_out, (hidden, cell) = self.decoder_lstm(input_emb, (hidden, cell))
-        preds = self.output_layer(dec_out)
-        logits = self.readout(preds)
+        # preds = self.output_layer(dec_out)
+        logits = self.readout(dec_out)
         return logits, hidden, cell
 
     
@@ -126,8 +131,6 @@ class BinaryAdditionLSTM(nn.Module):
     def loss(self, logits, targets):
         return nn.functional.cross_entropy(logits, targets)
     
-    # TODO: attach visualizations to trace
-    @torch.no_grad()
     def trace(self, input_seq, max_steps=100):
         e = self.encoder_lstm
         d = self.decoder_lstm
@@ -139,6 +142,30 @@ class BinaryAdditionLSTM(nn.Module):
         hidden = torch.zeros((self.hidden_size, 1))
         cell = torch.zeros((self.hidden_size, 1))
 
+        info = {
+            'enc': {
+                'cell': [],
+                'hidden': [],
+                'f': [],
+                'i': [],
+                'o': [],
+                'g':[]
+            },
+
+            'dec': {
+                'cell': [],
+                'hidden': [],
+                'f': [],
+                'i': [],
+                'o': [],
+                'g':[]
+            },
+            'input_emb': input_emb,
+            'output_emb': [],
+            'out': []
+        }
+
+        # encode
         for x in input_emb:
             x = x.reshape(-1, 1)
             in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
@@ -152,11 +179,21 @@ class BinaryAdditionLSTM(nn.Module):
 
             cell = f_gate * cell + i_gate * g_writ
             hidden = o_gate * tanh(cell)
+
+            info['enc']['cell'].append(cell)
+            info['enc']['hidden'].append(hidden)
+            info['enc']['f'].append(f_gate)
+            info['enc']['i'].append(i_gate)
+            info['enc']['g'].append(g_writ)
+            info['enc']['o'].append(o_gate)
         
+        # decode
         curr_tok = torch.tensor(self.end_idx)
         gen_out = [curr_tok]
         for _ in range(max_steps):
             x = self.embedding(curr_tok)
+            info['output_emb'].append(x)
+
             x = x.reshape(-1, 1)
             in_act = d.weight_ih_l0 @ x + d.bias_ih_l0.data.unsqueeze(1)
             hid_act = d.weight_hh_l0 @ hidden + d.bias_hh_l0.data.unsqueeze(1)
@@ -170,18 +207,26 @@ class BinaryAdditionLSTM(nn.Module):
             cell = f_gate * cell + i_gate * g_writ
             hidden = o_gate * tanh(cell)
 
-            x = self.output_layer.weight @ hidden + self.output_layer.bias.data.unsqueeze(1)
-            x = self.readout.weight @ x + self.readout.bias.data.unsqueeze(1)
+            # x = self.output_layer.weight @ hidden + self.output_layer.bias.data.unsqueeze(1)
+            x = self.readout.weight @ hidden + self.readout.bias.data.unsqueeze(1)
             x = x.flatten()
 
             curr_tok = torch.argmax(x)
             gen_out.append(curr_tok)
 
+            info['dec']['cell'].append(cell)
+            info['dec']['hidden'].append(hidden)
+            info['dec']['f'].append(f_gate)
+            info['dec']['i'].append(i_gate)
+            info['dec']['g'].append(g_writ)
+            info['dec']['o'].append(o_gate)
+
             if curr_tok.item() == self.end_idx:
                 break
         
         gen_out = [t.item() for t in gen_out]
-        return gen_out
+        info['out'] = gen_out
+        return info
     
     @torch.no_grad()
     def generate(self, input_seq, max_steps=100):
@@ -246,10 +291,35 @@ def compute_test_loss(model, test_dl):
     acc = torch.mean((preds == targets).type(torch.FloatTensor))
     return model.loss(logits, targets).item(), acc.item()
         
+@torch.no_grad()
+def compute_arithmetic_acc(model, test_dl, ds):
+    preds, targets = [], []
+    total_correct = 0
+    total_count = 0
+
+    for input_batch, output_batch in test_dl:
+        for input_seq, output_seq in zip(input_batch, output_batch):
+            input_seq = input_seq.unsqueeze(0).cuda()
+            output_seq = output_seq.unsqueeze(0).cuda()
+
+            logits, targets = model(input_seq, output_seq)
+            preds = logits.cpu().numpy().argmax(axis=-1)
+            targets = targets.cpu().numpy()
+
+            guess = ds.tokens_to_args(preds)
+            answer = ds.tokens_to_args(targets)
+            total_correct += int(guess == answer)
+            total_count += 1
+    
+    return total_correct / total_count
+
+'''
 # %%
 model = BinaryAdditionLSTM()
 model.load('save/mini')
+print(model)
 # %%
-out = model.trace([3,1,2,1,3])
-print(out)
+info = model.trace([3,1,2,1,1,3])
+print(info['out'])
 # %%
+'''
