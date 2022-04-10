@@ -14,7 +14,6 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.utils.data import Dataset
 
-# TODO: build exhaustive dataset
 class BinaryAdditionDataset(Dataset):
     def __init__(self, max_len=10000, arg_low=0, arg_high=16) -> None:
         super().__init__()
