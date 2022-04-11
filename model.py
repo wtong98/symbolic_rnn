@@ -228,10 +228,10 @@ class BinaryAdditionLSTM(nn.Module):
         return info
     
     @torch.no_grad()
-    def generate(self, input_seq, max_steps=100):
+    def generate(self, input_seq, max_steps=100, device='cpu'):
         input_seq = input_seq.unsqueeze(0)
         h, c = self.encode(input_seq)
-        curr_tok = torch.tensor([[self.end_idx]])
+        curr_tok = torch.tensor([[self.end_idx]], device=device)
         gen_out = [curr_tok]
 
         for _ in range(max_steps):
@@ -294,6 +294,7 @@ def compute_test_loss(model, test_dl):
 def compute_arithmetic_acc(model, test_dl, ds):
     preds, targets = [], []
     total_correct = 0
+    total_correct_no_teacher = 0
     total_count = 0
 
     for input_batch, output_batch in test_dl:
@@ -301,16 +302,29 @@ def compute_arithmetic_acc(model, test_dl, ds):
             input_seq = input_seq.unsqueeze(0).cuda()
             output_seq = output_seq.unsqueeze(0).cuda()
 
+            preds_no_teacher = model.generate(input_seq.squeeze(), device='cuda').cpu().numpy()
+
             logits, targets = model(input_seq, output_seq)
             preds = logits.cpu().numpy().argmax(axis=-1)
+
             targets = targets.cpu().numpy()
 
             guess = ds.tokens_to_args(preds)
+            guess_no_teacher = ds.tokens_to_args(preds_no_teacher)
             answer = ds.tokens_to_args(targets)
+
+            # print('input_seq', input_seq)
+            # print('output_seq', output_seq)
+            # print('guess', guess)
+            # print('guess no teacher', guess_no_teacher)
+            # print('answer', answer)
+            # print('total_correct', int(guess == answer))
             total_correct += int(guess == answer)
+            total_correct_no_teacher += int(guess_no_teacher == answer)
             total_count += 1
     
-    return total_correct / total_count
+    # print('TOTAL COUNT', total_count)
+    return total_correct / total_count, total_correct_no_teacher / total_count
 
 '''
 # %%

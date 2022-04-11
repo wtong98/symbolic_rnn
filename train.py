@@ -5,6 +5,7 @@ author: William Tong (wtong@g.harvard.edu)
 """
 
 # <codecell>
+import matplotlib.pyplot as plt
 import numpy as np
 
 import torch
@@ -13,14 +14,14 @@ from torch.utils.data import DataLoader, random_split
 
 from model import *
 
-# TODO: try with little-endian style
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, max_len=None, n_bits=4) -> None:
+    def __init__(self, max_len=None, n_bits=4, little_endian=False) -> None:
         super().__init__()
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
         self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token]
         self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+        self.little_endian = little_endian
 
         if max_len != None:
             self.examples = [self.args_to_tokens(
@@ -41,9 +42,12 @@ class BinaryAdditionDataset(Dataset):
 
                     a_str = '0' * (i - len(a_str)) + a_str
                     b_str = '0' * (i - len(b_str)) + b_str
-                    in_str = a_str + '+' + b_str
-                    in_toks = [self.end_token] + list(in_str) + [self.end_token]
+                    if self.little_endian:
+                        in_str = a_str[::-1] + '+' + b_str[::-1]
+                    else:
+                        in_str = a_str + '+' + b_str
 
+                    in_toks = [self.end_token] + list(in_str) + [self.end_token]
                     in_toks = [self.token_to_idx[t] for t in in_toks]
                     all_examples.append((in_toks, out_toks))
         
@@ -51,9 +55,16 @@ class BinaryAdditionDataset(Dataset):
     
     def args_to_tokens(self, *args):
         answer = np.sum(args)
-        in_str = '+'.join([f'{a:b}' for a in args])
+        if self.little_endian:
+            in_str = '+'.join([f'{a:b}'[::-1] for a in args])
+        else:
+            in_str = '+'.join([f'{a:b}' for a in args])
         in_toks = [self.end_token] + list(in_str) + [self.end_token]
-        out_toks = [self.end_token] + list(f'{answer:b}') + [self.end_token]
+
+        if self.little_endian:
+            out_toks = [self.end_token] + list(f'{answer:b}'[::-1]) + [self.end_token]
+        else:
+            out_toks = [self.end_token] + list(f'{answer:b}') + [self.end_token]
 
         in_toks = [self.token_to_idx[t] for t in in_toks]
         out_toks = [self.token_to_idx[t] for t in out_toks]
@@ -61,6 +72,8 @@ class BinaryAdditionDataset(Dataset):
     
     def tokens_to_args(self, tokens, return_bin=False):
         str_toks = [self.idx_to_token[t] for t in tokens]
+        while str_toks[-1] == self.pad_token:
+            str_toks = str_toks[:-1]
         if str_toks[0] == self.end_token:
             str_toks = str_toks[1:]
         if str_toks[-1] == self.end_token:
@@ -68,7 +81,10 @@ class BinaryAdditionDataset(Dataset):
         
         str_args = ''.join(str_toks).split('+')
         try:
-            args = [int(str_a, 2) for str_a in str_args]
+            if self.little_endian:
+                args = [int(str_a[::-1], 2) for str_a in str_args]
+            else:
+                args = [int(str_a, 2) for str_a in str_args]
         except:
             # print('invalid tokens: ', tokens)
             return None
@@ -94,17 +110,22 @@ class BinaryAdditionDataset(Dataset):
 
 
 # <codecell>
+ds = BinaryAdditionDataset(n_bits=6, little_endian=False)
+it = iter(ds)
 
-ds = BinaryAdditionDataset(n_bits=6)
+for _ in range(40):
+    print(next(it))
 
+
+# <codecell>
 test_split = 0.1
 test_len = int(len(ds) * test_split)
 train_len = len(ds) - test_len
 
 train_ds, test_ds = random_split(ds, [train_len, test_len])
 
-train_dl = DataLoader(train_ds, batch_size=16, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
-test_dl = DataLoader(test_ds, batch_size=16, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 model = BinaryAdditionLSTM(
     embedding_size=5,
@@ -112,13 +133,19 @@ model = BinaryAdditionLSTM(
 
 # <codecell>
 ### TRAINING
-n_epochs = 100
+n_epochs = 200
 
 optimizer = Adam(model.parameters(), lr=3e-4)
 
 losses = {'train': [], 'test': [], 'acc': []}
 running_loss = 0
 running_length = 0
+
+all_train_loss = []
+all_test_loss = []
+all_test_tok_acc = []
+all_test_arith_acc = []
+all_test_arith_acc_no_teacher = []
 
 for e in range(n_epochs):
     for i, (input_seq, output_seq) in enumerate(train_dl):
@@ -137,13 +164,35 @@ for e in range(n_epochs):
 
     curr_loss = running_loss / running_length
     test_loss, test_acc = compute_test_loss(model, test_dl)
-    arith_acc = compute_arithmetic_acc(model, test_dl, ds)
+    arith_acc_with_teacher, arith_acc_no_teacher = compute_arithmetic_acc(model, test_dl, ds)
 
-    print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc: {arith_acc:.4f}')
+    print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc_with_teacher: {arith_acc_with_teacher:.4f}    arith_acc_no_teacher: {arith_acc_no_teacher:.4f}')
     losses['train'].append(curr_loss)
     losses['test'].append(test_loss)
     losses['acc'].append(test_acc)
     running_loss = 0
+
+    all_train_loss.append(curr_loss)
+    all_test_loss.append(test_loss)
+    all_test_tok_acc.append(test_acc)
+    all_test_arith_acc.append(arith_acc_with_teacher)
+    all_test_arith_acc_no_teacher.append(arith_acc_no_teacher)
+
+
+# <codecell>
+plt.plot(all_train_loss, label='train loss')
+plt.plot(all_test_loss, label='test loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+# <codecell>
+plt.plot(all_test_tok_acc, label='token-wise accuracy')
+plt.plot(all_test_arith_acc, label='expression-wise accuracy')
+plt.plot(all_test_arith_acc_no_teacher, label='expression-wise accuracy (no teacher)')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
 
 # <codecell>
 ### SIMPLE EVALUATION
@@ -178,12 +227,62 @@ def print_test_case(ds, model, args):
     print(f'Input:  {in_toks}')
     print(f'Output: {pred_seq.tolist()}')
     print(f'Answer: {out_toks}')
+    return result == np.sum(in_args)
 
-print_test_case(ds, model, [2, 1])
-print_test_case(ds, model, [6, 7])
-print_test_case(ds, model, ['10', '01'])
-print_test_case(ds, model, [5, 25])
-print_test_case(ds, model, [16, 16])
+
+#TODO: performs much more poorly without 0 prefix pads, investigate further <-- STOPPED HERE
+def print_test_case_direct(ds, model, in_toks, out_toks):
+    in_args = ds.tokens_to_args(in_toks)
+
+    seq = torch.tensor(in_toks)
+    pred_seq = model.generate(seq)
+    result = ds.tokens_to_args(pred_seq)[0]
+
+    # logits, targets = model(in_toks.unsqueeze(0), out_toks.unsqueeze(0))
+    # pred_seq = logits.numpy().argmax(axis=-1)
+    # # print(pred_seq)
+    # try:
+    #     result = ds.tokens_to_args(pred_seq)[0]
+    # except:
+    #     return 0
+
+    prefix = 'GOOD '
+    if result != np.sum(in_args):
+        prefix = 'BAD '
+
+    in_toks = in_toks.tolist()
+    out_toks = out_toks.tolist()
+
+    print('-'*20)
+    print(f'{prefix}: {in_args[0]} + {in_args[1]} = {result}')
+    print(f'Input:  {in_toks}')
+    print(f'Output: {pred_seq.tolist()}')
+    print(f'Answer: {out_toks}')
+    return result == np.sum(in_args)
+
+total = 0
+correct = 0
+
+with torch.no_grad():
+    for expression, answer in iter(test_dl):
+        for exp, ans in zip(expression, answer):
+            while exp[-1] == ds.token_to_idx[ds.pad_token]:
+                exp = exp[:-1]
+            
+            args = ds.tokens_to_args(exp)
+            # result = print_test_case(ds, model, args)
+            result = print_test_case_direct(ds, model, exp, ans)
+
+            correct += int(result)
+            total += 1
+
+print(f'Total acc: {correct / total:.4f}')
+
+# print_test_case(ds, model, [2, 1])
+# print_test_case(ds, model, [6, 7])
+# print_test_case(ds, model, ['10', '01'])
+# print_test_case(ds, model, [5, 25])
+# print_test_case(ds, model, [16, 16])
 
 # <codecell>
 model.save('save/mini')
