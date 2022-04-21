@@ -14,24 +14,81 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.utils.data import Dataset
 
+
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, max_len=10000, arg_low=0, arg_high=16) -> None:
+    def __init__(self, max_len=None, n_bits=4, little_endian=False, op_filter=None) -> None:
+        """
+        filter template:
+
+        op_filter = {
+            arg1: [(op, [allowed_zero's]), (ditto)],
+            arg2: [ditto]
+        }
+        """
         super().__init__()
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
         self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token]
         self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+        self.little_endian = little_endian
+        self.filter = op_filter
 
-        self.examples = [self.args_to_tokens(
-            np.random.randint(arg_low, arg_high),
-            np.random.randint(arg_low, arg_high)
-        ) for _ in range(max_len)]
+        if max_len != None:
+            self.examples = [self.args_to_tokens(
+                np.random.randint(0, 2 ** n_bits),
+                np.random.randint(0, 2 ** n_bits)
+            ) for _ in range(max_len)]
+        else:
+            self.examples = self._exhaustive_enum(n_bits)
+    
+    def _exhaustive_enum(self, n_bits):
+        all_examples = []
+
+        for i in (np.arange(n_bits) + 1):
+            for a in range(2 ** i):
+                for b in range(2 ** i):
+                    in_toks, out_toks = self.args_to_tokens(a, b)
+                    a_str, b_str = ''.join([str(t) for t in in_toks])[1:-1].split(str(self.token_to_idx['+']))
+
+                    a_str = '0' * (i - len(a_str)) + a_str
+                    b_str = '0' * (i - len(b_str)) + b_str
+
+                    if self.filter != None and (self._check_match(a_str, 'arg1') or self._check_match(b_str, 'arg2')):
+                        continue
+
+                    if self.little_endian:
+                        in_str = a_str[::-1] + '+' + b_str[::-1]
+                    else:
+                        in_str = a_str + '+' + b_str
+
+                    in_toks = [self.end_token] + list(in_str) + [self.end_token]
+                    in_toks = [self.token_to_idx[t] for t in in_toks]
+                    all_examples.append((in_toks, out_toks))
+        
+        return all_examples
+
+    # TODO: fails for 0's
+    def _check_match(self, tok_str, arg_str):
+        arg = int(tok_str, 2)
+        for op, n_zeros in self.filter[arg_str]:
+            for n in n_zeros:
+                if arg == op and tok_str.startswith(n * '0' + '1'):
+                    return True
+
+        return False
     
     def args_to_tokens(self, *args):
         answer = np.sum(args)
-        in_str = '+'.join([f'{a:b}' for a in args])
+        if self.little_endian:
+            in_str = '+'.join([f'{a:b}'[::-1] for a in args])
+        else:
+            in_str = '+'.join([f'{a:b}' for a in args])
         in_toks = [self.end_token] + list(in_str) + [self.end_token]
-        out_toks = [self.end_token] + list(f'{answer:b}') + [self.end_token]
+
+        if self.little_endian:
+            out_toks = [self.end_token] + list(f'{answer:b}'[::-1]) + [self.end_token]
+        else:
+            out_toks = [self.end_token] + list(f'{answer:b}') + [self.end_token]
 
         in_toks = [self.token_to_idx[t] for t in in_toks]
         out_toks = [self.token_to_idx[t] for t in out_toks]
@@ -39,6 +96,8 @@ class BinaryAdditionDataset(Dataset):
     
     def tokens_to_args(self, tokens, return_bin=False):
         str_toks = [self.idx_to_token[t] for t in tokens]
+        while str_toks[-1] == self.pad_token:
+            str_toks = str_toks[:-1]
         if str_toks[0] == self.end_token:
             str_toks = str_toks[1:]
         if str_toks[-1] == self.end_token:
@@ -46,7 +105,10 @@ class BinaryAdditionDataset(Dataset):
         
         str_args = ''.join(str_toks).split('+')
         try:
-            args = [int(str_a, 2) for str_a in str_args]
+            if self.little_endian:
+                args = [int(str_a[::-1], 2) for str_a in str_args]
+            else:
+                args = [int(str_a, 2) for str_a in str_args]
         except:
             # print('invalid tokens: ', tokens)
             return None
