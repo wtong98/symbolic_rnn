@@ -17,7 +17,7 @@ from model import *
 ds = BinaryAdditionDataset(n_bits=2)
 
 model = BinaryAdditionLSTM()
-model.load('save/medium_2k')
+model.load('save/micro_128k')
 
 # <codecell>
 ### PLOT EMBEDDINGS # TODO: make it cleaner
@@ -145,40 +145,49 @@ plt.savefig('save/fig/micro_saliency.png')
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
 all_seqs = []
+all_seqs_rev = []
 all_trajs = []
+all_trajs_rev = []
 
 test_seqs = [
     # 0 block
     # [3, 0, 2, 0, 3],
     # [3, 0, 0, 2, 0, 3],
-    # [3, 0, 2, 0, 0, 3],
-    # [3, 0, 0, 2, 0, 0, 3],
-
-    # 1 block
-    # [3, 0, 2, 1, 3],
-    # [3, 0, 2, 0, 1, 3],
-    # [3, 0, 0, 2, 1, 3],
-    # [3, 0, 0, 2, 0, 1, 3],
+    [3, 0, 2, 0, 0, 3],
+    [3, 0, 0, 2, 0, 0, 3],
 
     # 1 block
     # [3, 1, 2, 0, 3],
+    # [3, 0, 2, 1, 3],
+    # [3, 0, 1, 2, 0, 0, 3],
+    # [3, 0, 0, 2, 0, 1, 3],
     # [3, 0, 1, 2, 0, 3],
     # [3, 1, 2, 0, 0, 3],
-    # [3, 0, 1, 2, 0, 0, 3],
 
     # 2 block
-    [3, 1, 2, 1, 3],
-    [3, 0, 1, 2, 1, 3],
-    [3, 1, 2, 0, 1, 3],
-    [3, 0, 1, 2, 0, 1, 3],
-    [3, 0, 0, 2, 1, 1, 3],
-    [3, 1, 1, 2, 0, 0, 3],
+    # [3, 1, 2, 1, 3],
+    # [3, 0, 1, 2, 1, 3],
+    # [3, 1, 2, 0, 1, 3],
+    # [3, 0, 1, 2, 0, 1, 3],
 
     # 3 block
+    # [3, 0, 0, 2, 1, 1, 3],
+    # [3, 1, 1, 2, 0, 0, 3],
+
+    # 4 block
     # [3, 1, 1, 2, 1, 3],
-    # [3, 1, 1, 2, 0, 1, 3],
+    # [3, 0, 1, 2, 1, 1, 3],
     # [3, 1, 2, 1, 1, 3],
     # [3, 0, 1, 2, 1, 1, 3],
+
+    # 5 block
+    # [3, 1, 1, 2, 1, 0, 3],
+    # [3, 1, 0, 2, 1, 1, 3],
+    # [3, 1, 0, 2, 0, 1, 1, 3],
+    # [3, 0, 1, 0, 2, 1, 1, 3],
+
+    # 6 block
+    # [3, 1, 1, 2, 1, 1, 3]
 ]
 
 for seq in test_seqs:
@@ -187,22 +196,31 @@ for seq in test_seqs:
         info = model.trace(seq)
     
     traj = torch.cat(info['enc']['cell'], axis=1).numpy()
+    traj_rev = torch.cat(info['dec']['cell'], axis=1).numpy()
+
     all_trajs.append(traj)
+    all_trajs_rev.append(traj_rev)
     all_seqs.append(seq.numpy())
+    all_seqs_rev.append(info['out'])
 
 trajs_blob = np.concatenate(all_trajs.copy(), axis=-1)
 pca = PCA(n_components=2)
 pca.fit_transform(trajs_blob.T)
 
 plt.gcf().set_size_inches(12, 12)
-for seq, traj in zip(all_seqs, all_trajs):
-    traj = pca.transform(traj.T).T
+for i, seq, seq_rev, traj, traj_rev in zip(range(len(all_seqs)), all_seqs, all_seqs_rev, all_trajs, all_trajs_rev):
+    # traj = pca.transform(traj.T).T
     jit_x = np.random.uniform() * 0.04
     jit_y = np.random.uniform() * 0.04
+
     plt.plot(traj[0,:] + jit_x, traj[1,:] + jit_y, 'o-', label=str(seq), alpha=0.8)
+    plt.plot(traj_rev[0,:] + jit_x, traj_rev[1,:] + jit_y, 'o--', alpha=0.8, color=f'C{i}', label=str(seq_rev))
+
+    plt.annotate('enc start', (traj[0,0], traj[1,0]))
+    plt.annotate('dec start', (traj_rev[0,0], traj_rev[1,0]))
 
 plt.legend()
-# plt.savefig('save/fig/micro_128k_traj_2.png')
+# plt.savefig('save/fig/micro_128k_traj_5.png')
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
@@ -224,14 +242,20 @@ for seq, out in ds:
     all_labs_pred.append(lab_pred[0])
 
 all_points = np.concatenate(all_points, axis=-1)
-all_points = PCA(n_components=2).fit_transform(all_points.T).T
+# all_points = PCA(n_components=2).fit_transform(all_points.T).T
 
-plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
+for i in range(max(all_labs_true)+1):
+    idx = np.array(all_labs_true) == i
+    plt.scatter(all_points[0,:][idx], all_points[1,:][idx], label=str(i))
+
 plt.legend()
-# plt.savefig('save/fig/micro_128k_cell_cloud.png')
+plt.savefig('save/fig/micro_128k_cell_cloud.png')
 
 # <codecell>
-plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_pred)
+for i in range(max(all_labs_pred)+1):
+    idx = np.array(all_labs_pred) == i
+    plt.scatter(all_points[0,:][idx], all_points[1,:][idx], label=str(i))
+
 plt.legend()
 
 # %%
