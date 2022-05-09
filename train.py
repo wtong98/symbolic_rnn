@@ -5,21 +5,142 @@ author: William Tong (wtong@g.harvard.edu)
 """
 
 # <codecell>
+import functools
+import itertools
+
 import matplotlib.pyplot as plt
 import numpy as np
-
 from sklearn.decomposition import PCA
-
 import torch
 from torch.optim import Adam
 from torch.utils.data import DataLoader, random_split
 
 from model import *
 
-# TODO: missing combo's of mixed frequency args
-# TODO: try with larger dataset to highlight generalization difference?
 # <codecell>
-ds = BinaryAdditionDataset(n_bits=2, little_endian=False, op_filter={
+class BinaryAdditionDataset(Dataset):
+    def __init__(self, n_bits=4, max_args = 2, little_endian=False, op_filter=None) -> None:
+        """
+        filter template:
+
+        op_filter = {
+            arg1: [(op, [allowed_zero's]), (ditto)],
+            arg2: [ditto]
+        }
+        """
+        super().__init__()
+        self.n_bits = n_bits
+        self.max_args = max_args
+        self.little_endian = little_endian
+        self.filter = op_filter
+
+        self.end_token = '<END>'
+        self.pad_token = '<PAD>'
+        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token]
+        self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+
+        self.examples = []
+        for i in (np.arange(max_args) + 1):
+            exs = self._exhaustive_enum(i)
+            self.examples.extend(exs)
+    
+    def _exhaustive_enum(self, n_args):
+        all_args = []
+        for i in (np.arange(self.n_bits) + 1):
+            cart_args = i * [[0, 1]]
+            args = itertools.product(*cart_args)
+            all_args.extend(args)
+        
+        cart_terms = n_args * [all_args]
+        all_terms = itertools.product(*cart_terms)
+        
+        all_examples = []
+        plus_idx = self.token_to_idx['+']
+        end_idx = self.token_to_idx[self.end_token]
+        for term in all_terms:
+            in_toks = functools.reduce(lambda a, b: a + (plus_idx,) + b, term)
+            in_toks = (end_idx,) + in_toks + (end_idx,)
+
+            out_val = np.sum(self.tokens_to_args(in_toks))
+            out_toks = self.args_to_tokens(out_val, args_only=True)
+            all_examples.append((in_toks, out_toks))
+        
+        return all_examples
+
+
+    # TODO: fails for 0's
+    def _check_match(self, tok_str, arg_str):
+        arg = int(tok_str, 2)
+        for op, n_zeros in self.filter[arg_str]:
+            for n in n_zeros:
+                if arg == op and tok_str.startswith(n * '0' + '1'):
+                    return True
+
+        return False
+    
+    def args_to_tokens(self, *args, with_end=True, args_only=False):
+        answer = np.sum(args)
+        if self.little_endian:
+            in_str = '+'.join([f'{a:b}'[::-1] for a in args])
+        else:
+            in_str = '+'.join([f'{a:b}' for a in args])
+        in_toks = [self.end_token] * with_end + list(in_str) + [self.end_token] * with_end
+        in_toks = [self.token_to_idx[t] for t in in_toks]
+
+        if args_only:
+            return in_toks
+
+        if self.little_endian:
+            out_toks = list(f'{answer:b}'[::-1])
+        else:
+            out_toks = list(f'{answer:b}')
+        
+        out_toks = [self.end_token] * with_end + out_toks + [self.end_token] * with_end
+        out_toks = [self.token_to_idx[t] for t in out_toks]
+        return in_toks, out_toks
+    
+    def tokens_to_args(self, tokens, return_bin=False):
+        str_toks = [self.idx_to_token[t] for t in tokens]
+        while str_toks[-1] == self.pad_token:
+            str_toks = str_toks[:-1]
+        if str_toks[0] == self.end_token:
+            str_toks = str_toks[1:]
+        if str_toks[-1] == self.end_token:
+            str_toks = str_toks[:-1]
+        
+        str_args = ''.join(str_toks).split('+')
+        try:
+            if self.little_endian:
+                args = [int(str_a[::-1], 2) for str_a in str_args]
+            else:
+                args = [int(str_a, 2) for str_a in str_args]
+        except:
+            # print('invalid tokens: ', tokens)
+            return None
+
+        if return_bin:
+            return args, str_args
+        else:
+            return args
+    
+    def pad_collate(self, batch):
+        xs, ys = zip(*batch)
+        pad_id = self.token_to_idx[self.pad_token]
+        xs_pad = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+        ys_pad = pad_sequence(ys, batch_first=True, padding_value=pad_id)
+        return xs_pad, ys_pad
+
+    def __getitem__(self, idx):
+        x, y = self.examples[idx]
+        return torch.tensor(x), torch.tensor(y)
+    
+    def __len__(self):
+        return len(self.examples)
+
+
+
+# <codecell>
+ds = BinaryAdditionDataset(n_bits=2, max_args=3, little_endian=False, op_filter={
     # 'arg1': [(6, [0, 1, 2, 3])],
     'arg1': [],
     'arg2': [],
@@ -27,7 +148,7 @@ ds = BinaryAdditionDataset(n_bits=2, little_endian=False, op_filter={
 
 it = iter(ds)
 
-for _, val in zip(range(40), iter(ds)):
+for _, val in zip(range(300), iter(ds)):
     print(val)
 
 
@@ -45,13 +166,17 @@ test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_work
 
 model = BinaryAdditionLSTM(
     embedding_size=5,
-    hidden_size=1).cuda()
+    hidden_size=5).cuda()
+# model.load('save/micro_128k_vargs2')
+# model.cuda()
+# model.train()
 
 # <codecell>
 ### TRAINING
-n_epochs = 128000
+# n_epochs = 128000
+n_epochs = 30000
 
-optimizer = Adam(model.parameters(), lr=3e-4)
+optimizer = Adam(model.parameters(), lr=1e-4)
 
 losses = {'train': [], 'test': [], 'acc': []}
 running_loss = 0
@@ -63,7 +188,7 @@ all_test_tok_acc = []
 all_test_arith_acc = []
 all_test_arith_acc_no_teacher = []
 
-eval_every = 100
+eval_every = 20
 
 for e in range(n_epochs):
     for i, (input_seq, output_seq) in enumerate(train_dl):
@@ -98,6 +223,7 @@ for e in range(n_epochs):
         all_test_arith_acc.append(arith_acc_with_teacher)
         all_test_arith_acc_no_teacher.append(arith_acc_no_teacher)
 
+print('done!')
 
 # <codecell>
 epochs = (np.arange(0, n_epochs // eval_every) + 1) * eval_every
@@ -161,7 +287,8 @@ def print_test_case(ds, model, args):
         prefix = 'BAD '
 
     print('-'*20)
-    print(f'{prefix}: {in_args[0]} + {in_args[1]} = {result}')
+    arg_str = ' + '.join([str(args) for args in in_args])
+    print(f'{prefix}: {arg_str} = {result}')
     print(f'Input:  {in_toks}')
     print(f'Output: {pred_seq.tolist()}')
     print(f'Answer: {out_toks}')
@@ -178,8 +305,8 @@ def print_test_case_direct(ds, model, in_toks, out_toks):
         seq = torch.tensor(in_toks)
 
     pred_seq = model.generate(seq)
-    print('pred_seq', pred_seq)
-    result = ds.tokens_to_args(pred_seq)[0]
+    result = ds.tokens_to_args(pred_seq)
+    result = result[0] if result != None else None
 
     # logits, targets = model(in_toks.unsqueeze(0), out_toks.unsqueeze(0))
     # pred_seq = logits.numpy().argmax(axis=-1)
@@ -199,7 +326,8 @@ def print_test_case_direct(ds, model, in_toks, out_toks):
         out_toks = out_toks.tolist()
 
     print('-'*20)
-    print(f'{prefix}: {in_args[0]} + {in_args[1]} = {result}')
+    arg_str = ' + '.join([str(args) for args in in_args])
+    print(f'{prefix}: {arg_str} = {result}')
     print(f'Input:  {in_toks}')
     print(f'Output: {pred_seq.tolist()}')
     print(f'Answer: {out_toks}')
@@ -230,26 +358,33 @@ print(f'Total acc: {correct / total:.4f}')
 # print_test_case(ds, model, [16, 16])
 
 # <codecell>
-### INVESTIGATE INFLUENCE OF 0's
-total = 0
-correct = 0
-for a in np.arange(2 ** 6):
-    print('a', a)
-    total += 1
-    result = print_test_case(ds, model, (6, a))
-    if result:
-        correct += 1
+### MANUAL TRIAL
+# total = 0
+# correct = 0
+# for a in np.arange(2 ** 6):
+#     print('a', a)
+#     total += 1
+#     result = print_test_case(ds, model, (6, a))
+#     if result:
+#         correct += 1
 
-print(f'total acc: {correct / total :.4f}')
+# print(f'total acc: {correct / total :.4f}')
+
+# print_test_case(ds, model, (1,2,2))
+
+print_test_case_direct(ds, model,
+    [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 3],
+    [3,3]
+)
 
 # print_test_case_direct(ds, model,
-#     [3, 1, 1, 0, 2, 1, 1, 3],
+#     [3, 1, 0, 2, 0, 0, 0, 0, 1, 3],
 #     [3,3]
 # )
 
 
 # <codecell>
-model.save('save/medium_2k')
+model.save('save/hid5_30k_vargs3')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -278,10 +413,14 @@ test_seqs = [
     # 2 block
     [3, 1, 2, 1, 3],
     [3, 0, 1, 2, 1, 3],
-    [3, 1, 2, 0, 1, 3],
-    [3, 0, 1, 2, 0, 1, 3],
-    [3, 0, 0, 2, 1, 1, 3],
-    [3, 1, 1, 2, 0, 0, 3],
+    # [3, 1, 2, 0, 1, 3],
+    # [3, 1, 0, 3],
+    [3, 0, 1, 0, 3],
+    [3, 0, 0, 0, 0, 1, 0, 2, 0, 3],
+    [3, 1, 2, 0, 2, 1, 3],
+    # [3, 0, 1, 2, 0, 1, 3],
+    # [3, 0, 0, 2, 1, 1, 3],
+    # [3, 1, 1, 2, 0, 0, 3],
 
     # 3 block
     # [3, 1, 1, 2, 1, 3],
@@ -312,6 +451,8 @@ for seq, traj in zip(all_seqs, all_trajs):
 
 plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
+
+# %%
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
