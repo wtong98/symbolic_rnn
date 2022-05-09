@@ -17,7 +17,7 @@ from model import *
 ds = BinaryAdditionDataset(n_bits=2)
 
 model = BinaryAdditionLSTM()
-model.load('save/micro_128k')
+model.load('save/hid5_30k_vargs3')
 
 # <codecell>
 ### PLOT EMBEDDINGS # TODO: make it cleaner

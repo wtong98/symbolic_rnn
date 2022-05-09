@@ -164,10 +164,10 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-model = BinaryAdditionLSTM(
+model = BinaryAdditionRNN(
     embedding_size=5,
     hidden_size=5).cuda()
-# model.load('save/micro_128k_vargs2')
+model.load('save/hid5_30k_vargs3_rnn')
 # model.cuda()
 # model.train()
 
@@ -384,7 +384,7 @@ print_test_case_direct(ds, model,
 
 
 # <codecell>
-model.save('save/hid5_30k_vargs3')
+model.save('save/hid5_30k_vargs3_rnn')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -412,11 +412,11 @@ test_seqs = [
 
     # 2 block
     [3, 1, 2, 1, 3],
-    [3, 0, 1, 2, 1, 3],
+    # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
-    [3, 0, 1, 0, 3],
-    [3, 0, 0, 0, 0, 1, 0, 2, 0, 3],
+    # [3, 0, 1, 0, 3],
+    # [3, 0, 0, 0, 0, 1, 0, 2, 0, 3],
     [3, 1, 2, 0, 2, 1, 3],
     # [3, 0, 1, 2, 0, 1, 3],
     # [3, 0, 0, 2, 1, 1, 3],
@@ -434,7 +434,7 @@ for seq in test_seqs:
     with torch.no_grad():
         info = model.trace(seq)
     
-    traj = torch.cat(info['enc']['cell'], axis=1).numpy()
+    traj = torch.cat(info['enc']['hidden'], axis=1).numpy()
     all_trajs.append(traj)
     all_seqs.append(seq.numpy())
 
@@ -465,7 +465,7 @@ for seq, out in ds:
     with torch.no_grad():
         info = model.trace(seq)
     
-    point = info['enc']['cell'][-1].numpy()
+    point = info['enc']['hidden'][-1].numpy()
     all_points.append(point)
 
     lab_true = ds.tokens_to_args(out)
