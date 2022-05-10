@@ -360,8 +360,6 @@ class BinaryAdditionRNN(nn.Module):
             num_layers=self.n_layers,
             batch_first=True,
         )
-        #TODO: is the extra readout needed?
-        # self.output_layer = nn.Linear(self.hidden_size, self.embedding_size)
         self.readout = nn.Linear(self.hidden_size, self.num_ops)
     
     def encode(self, input_seq):
@@ -393,7 +391,6 @@ class BinaryAdditionRNN(nn.Module):
     def loss(self, logits, targets):
         return nn.functional.cross_entropy(logits, targets)
     
-    # TODO: test trace, replace decoder with one-hot <-- STOPPED HERE
     def trace(self, input_seq, max_steps=100):
         e = self.encoder_rnn
         d = self.decoder_rnn
@@ -495,6 +492,113 @@ class BinaryAdditionRNN(nn.Module):
         weights = torch.load(path / 'weights.pt')
         self.load_state_dict(weights)
         self.eval()
+
+
+class BinaryAdditionFlatRNN(nn.Module):
+    def __init__(self, max_arg, num_ops=5, end_idx=3, padding_idx=4, embedding_size=5, hidden_size=100, n_layers=1) -> None:
+        super().__init__()
+
+        self.max_arg = max_arg
+        self.num_ops = num_ops
+        self.end_idx = end_idx
+        self.padding_idx = padding_idx
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+
+        self.embedding = nn.Embedding(self.num_ops, self.embedding_size)
+        self.encoder_rnn = nn.RNN(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers,
+            batch_first=True,
+        )
+
+        self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)
+    
+    def encode(self, input_seq):
+        input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
+        input_emb = self.embedding(input_seq)
+        input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
+        _, enc_h = self.encoder_rnn(input_packed)
+
+        return enc_h[-1,...]   # last hidden layer
+    
+    def forward(self, input_seq):
+        enc_h = self.encode(input_seq)
+        logits = self.readout(enc_h)
+        return logits
+    
+    def loss(self, logits, targets):
+        return nn.functional.cross_entropy(logits, targets)
+    
+    def trace(self, input_seq):
+        e = self.encoder_rnn
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'hidden': [],
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+
+            in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
+            hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
+            hidden = torch.tanh(in_act + hid_act)
+            info['enc']['hidden'].append(hidden)
+        
+        logits = self.readout(hidden.T).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
+
+    @torch.no_grad()
+    def generate(self, input_seq):
+        input_seq = input_seq.unsqueeze(0)
+        h = self.encode(input_seq)
+        logits = self.readout(h)
+        return torch.argmax(logits, dim=-1)
+    
+    def save(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        if not path.exists():
+            path.mkdir(parents=True)
+
+        torch.save(self.state_dict(), path / 'weights.pt')
+        params = {
+            'max_arg': self.max_arg,
+            'embedding_size': self.embedding_size,
+            'hidden_size': self.hidden_size,
+            'n_layers': self.n_layers
+        }
+
+        with (path / 'params.json').open('w') as fp:
+            json.dump(params, fp)
+    
+    def load(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        with (path / 'params.json').open() as fp:
+            params = json.load(fp)
+        
+        self.__init__(**params)
+        weights = torch.load(path / 'weights.pt')
+        self.load_state_dict(weights)
+        self.eval()
     
 
 @torch.no_grad()
@@ -514,6 +618,26 @@ def compute_test_loss(model, test_dl):
     preds = torch.argmax(logits, dim=-1)
     acc = torch.mean((preds == targets).type(torch.FloatTensor))
     return model.loss(logits, targets).item(), acc.item()
+
+
+@torch.no_grad()
+def compute_test_loss_flat(model, test_dl):
+    all_preds, all_targs = [], []
+    for input_seq, targets in test_dl:
+        input_seq = input_seq.cuda()
+        targets = targets.cuda()
+
+        logits = model(input_seq)
+        all_preds.append(logits)
+        all_targs.append(targets)
+
+    logits = torch.cat(all_preds, dim=0)
+    targets = torch.cat(all_targs, dim=0)
+
+    preds = torch.argmax(logits, dim=-1)
+    acc = torch.mean((preds == targets).type(torch.FloatTensor))
+    return model.loss(logits, targets).item(), acc.item()
+
         
 @torch.no_grad()
 def compute_arithmetic_acc(model, test_dl, ds):
@@ -551,13 +675,36 @@ def compute_arithmetic_acc(model, test_dl, ds):
     # print('TOTAL COUNT', total_count)
     return total_correct / total_count, total_correct_no_teacher / total_count
 
+
+@torch.no_grad()
+def compute_arithmetic_acc_flat(model, test_dl, ds):
+    preds, targets = [], []
+    total_correct = 0
+    total_count = 0
+
+    for input_batch, output_batch in test_dl:
+        for input_seq, targets in zip(input_batch, output_batch):
+            input_seq = input_seq.unsqueeze(0).cuda()
+            targets = targets.cpu().numpy()
+
+            logits = model(input_seq)
+            preds = logits.cpu().numpy().argmax(axis=-1)
+
+            guess = ds.tokens_to_args(preds)
+            answer = ds.tokens_to_args(targets)
+
+            total_correct += int(guess == answer)
+            total_count += 1
+    
+    return total_correct / total_count
+
 '''
 # %%
-model = BinaryAdditionRNN()
-model.load('save/hid5_30k_vargs3_rnn')
+model = BinaryAdditionFlatRNN(0)
+model.load('save/hid5_50k_vargs3_rnn_flat')
 print(model)
 # %%
-info = model.trace([3,1,2,1,1,2,1,3])
+info = model.trace([3,1,2,1,3])
 print(info['out'])
 # %%
 '''

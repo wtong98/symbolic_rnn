@@ -19,7 +19,7 @@ from model import *
 
 # <codecell>
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, n_bits=4, max_args = 2, little_endian=False, op_filter=None) -> None:
+    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, little_endian=False, op_filter=None) -> None:
         """
         filter template:
 
@@ -30,6 +30,7 @@ class BinaryAdditionDataset(Dataset):
         """
         super().__init__()
         self.n_bits = n_bits
+        self.onehot_out = onehot_out
         self.max_args = max_args
         self.little_endian = little_endian
         self.filter = op_filter
@@ -62,8 +63,9 @@ class BinaryAdditionDataset(Dataset):
             in_toks = (end_idx,) + in_toks + (end_idx,)
 
             out_val = np.sum(self.tokens_to_args(in_toks))
-            out_toks = self.args_to_tokens(out_val, args_only=True)
-            all_examples.append((in_toks, out_toks))
+            if not self.onehot_out:
+                out_val = self.args_to_tokens(out_val, args_only=True)
+            all_examples.append((in_toks, out_val))
         
         return all_examples
 
@@ -126,9 +128,13 @@ class BinaryAdditionDataset(Dataset):
     def pad_collate(self, batch):
         xs, ys = zip(*batch)
         pad_id = self.token_to_idx[self.pad_token]
-        xs_pad = pad_sequence(xs, batch_first=True, padding_value=pad_id)
-        ys_pad = pad_sequence(ys, batch_first=True, padding_value=pad_id)
-        return xs_pad, ys_pad
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+
+        if self.onehot_out:
+            ys_out = torch.stack(ys)
+        else:
+            ys_out = pad_sequence(ys, batch_first=True, padding_value=pad_id)
+        return xs_out, ys_out
 
     def __getitem__(self, idx):
         x, y = self.examples[idx]
@@ -140,7 +146,7 @@ class BinaryAdditionDataset(Dataset):
 
 
 # <codecell>
-ds = BinaryAdditionDataset(n_bits=2, max_args=3, little_endian=False, op_filter={
+ds = BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, little_endian=False, op_filter={
     # 'arg1': [(6, [0, 1, 2, 3])],
     'arg1': [],
     'arg2': [],
@@ -164,17 +170,38 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-model = BinaryAdditionRNN(
+model = BinaryAdditionFlatRNN(
+    max_arg=9,
     embedding_size=5,
     hidden_size=5).cuda()
-model.load('save/hid5_30k_vargs3_rnn')
+model.load('save/hid5_50k_vargs3_rnn_flat')
 # model.cuda()
 # model.train()
 
 # <codecell>
 ### TRAINING
 # n_epochs = 128000
-n_epochs = 30000
+@torch.no_grad()
+def compute_arithmetic_acc_flat(model, test_dl, ds):
+    preds, targets = [], []
+    total_correct = 0
+    total_count = 0
+
+    for input_batch, output_batch in test_dl:
+        for input_seq, targets in zip(input_batch, output_batch):
+            input_seq = input_seq.unsqueeze(0).cuda()
+            targets = targets.cpu().numpy()
+
+            logits = model(input_seq)
+            preds = logits.cpu().numpy().argmax(axis=-1)
+
+            total_correct += np.sum(preds == targets)
+            total_count += 1
+    
+    return total_correct / total_count
+
+
+n_epochs = 50000
 
 optimizer = Adam(model.parameters(), lr=1e-4)
 
@@ -188,16 +215,18 @@ all_test_tok_acc = []
 all_test_arith_acc = []
 all_test_arith_acc_no_teacher = []
 
-eval_every = 20
+eval_every = 100
 
 for e in range(n_epochs):
     for i, (input_seq, output_seq) in enumerate(train_dl):
         input_seq = input_seq.cuda()
-        output_seq = output_seq.cuda()
+        # output_seq = output_seq.cuda()
+        targets = output_seq.cuda()
 
         optimizer.zero_grad()
 
-        logits, targets = model(input_seq, output_seq)
+        # logits, targets = model(input_seq, output_seq)
+        logits = model(input_seq)
         loss = model.loss(logits, targets)
         loss.backward()
         optimizer.step()
@@ -207,10 +236,11 @@ for e in range(n_epochs):
 
     if (e+1) % eval_every == 0:
         curr_loss = running_loss / running_length
-        test_loss, test_acc = compute_test_loss(model, test_dl)
-        arith_acc_with_teacher, arith_acc_no_teacher = compute_arithmetic_acc(model, test_dl, ds)
+        test_loss, test_acc = compute_test_loss_flat(model, test_dl)
+        # arith_acc_with_teacher, arith_acc_no_teacher = compute_arithmetic_acc(model, test_dl, ds)
+        arith_acc_with_teacher = compute_arithmetic_acc_flat(model, test_dl, ds)
 
-        print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc_with_teacher: {arith_acc_with_teacher:.4f}    arith_acc_no_teacher: {arith_acc_no_teacher:.4f}')
+        print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc_with_teacher: {arith_acc_with_teacher:.4f} ')
         losses['train'].append(curr_loss)
         losses['test'].append(test_loss)
         losses['acc'].append(test_acc)
@@ -221,7 +251,7 @@ for e in range(n_epochs):
         all_test_loss.append(test_loss)
         all_test_tok_acc.append(test_acc)
         all_test_arith_acc.append(arith_acc_with_teacher)
-        all_test_arith_acc_no_teacher.append(arith_acc_no_teacher)
+        # all_test_arith_acc_no_teacher.append(arith_acc_no_teacher)
 
 print('done!')
 
@@ -239,7 +269,7 @@ plt.legend()
 # <codecell>
 plt.plot(epochs, all_test_tok_acc, label='token-wise accuracy')
 plt.plot(epochs, all_test_arith_acc, label='expression-wise accuracy')
-plt.plot(epochs, all_test_arith_acc_no_teacher, label='expression-wise accuracy (no teacher)')
+# plt.plot(epochs, all_test_arith_acc_no_teacher, label='expression-wise accuracy (no teacher)')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.legend()
@@ -305,7 +335,8 @@ def print_test_case_direct(ds, model, in_toks, out_toks):
         seq = torch.tensor(in_toks)
 
     pred_seq = model.generate(seq)
-    result = ds.tokens_to_args(pred_seq)
+    # result = ds.tokens_to_args(pred_seq)
+    result = pred_seq
     result = result[0] if result != None else None
 
     # logits, targets = model(in_toks.unsqueeze(0), out_toks.unsqueeze(0))
@@ -373,7 +404,8 @@ print(f'Total acc: {correct / total:.4f}')
 # print_test_case(ds, model, (1,2,2))
 
 print_test_case_direct(ds, model,
-    [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 3],
+    # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
+    [3, 1, 2, 0, 1, 3],
     [3,3]
 )
 
@@ -384,7 +416,7 @@ print_test_case_direct(ds, model,
 
 
 # <codecell>
-model.save('save/hid5_30k_vargs3_rnn')
+model.save('save/hid5_50k_vargs3_rnn_flat')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -411,13 +443,14 @@ test_seqs = [
     # [3, 0, 1, 2, 0, 0, 3],
 
     # 2 block
-    [3, 1, 2, 1, 3],
+    [3, 1, 0, 2, 1, 0, 3],
     # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
     # [3, 0, 1, 0, 3],
     # [3, 0, 0, 0, 0, 1, 0, 2, 0, 3],
-    [3, 1, 2, 0, 2, 1, 3],
+    [3, 1, 2, 1, 2, 1, 2, 1, 3],
+    [3, 1, 1, 3]
     # [3, 0, 1, 2, 0, 1, 3],
     # [3, 0, 0, 2, 1, 1, 3],
     # [3, 1, 1, 2, 0, 0, 3],
