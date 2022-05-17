@@ -4,6 +4,8 @@ Model and dataset definitions
 author: William Tong (wtong@g.harvard.edu)
 """
 # <codecell>
+import itertools
+import functools
 import json
 from pathlib import Path
 
@@ -16,7 +18,7 @@ from torch.utils.data import Dataset
 
 
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, max_len=None, n_bits=4, little_endian=False, op_filter=None) -> None:
+    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, op_filter=None) -> None:
         """
         filter template:
 
@@ -26,48 +28,50 @@ class BinaryAdditionDataset(Dataset):
         }
         """
         super().__init__()
+        self.n_bits = n_bits
+        self.onehot_out = onehot_out
+        self.max_args = max_args
+        self.little_endian = little_endian
+        self.filter = op_filter
+
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
         self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token]
         self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
-        self.little_endian = little_endian
-        self.filter = op_filter
 
-        if max_len != None:
-            self.examples = [self.args_to_tokens(
-                np.random.randint(0, 2 ** n_bits),
-                np.random.randint(0, 2 ** n_bits)
-            ) for _ in range(max_len)]
+        self.examples = []
+        if max_only:
+            self.examples.extend(self._exhaustive_enum(self.max_args))
         else:
-            self.examples = self._exhaustive_enum(n_bits)
+            for i in (np.arange(max_args) + 1):
+                exs = self._exhaustive_enum(i)
+                self.examples.extend(exs)
     
-    def _exhaustive_enum(self, n_bits):
+    def _exhaustive_enum(self, n_args):
+        all_args = []
+        for i in (np.arange(self.n_bits) + 1):
+            cart_args = i * [[0, 1]]
+            args = itertools.product(*cart_args)
+            all_args.extend(args)
+        
+        cart_terms = n_args * [all_args]
+        all_terms = itertools.product(*cart_terms)
+        
         all_examples = []
+        plus_idx = self.token_to_idx['+']
+        end_idx = self.token_to_idx[self.end_token]
+        for term in all_terms:
+            in_toks = functools.reduce(lambda a, b: a + (plus_idx,) + b, term)
+            in_toks = (end_idx,) + in_toks + (end_idx,)
 
-        for i in (np.arange(n_bits) + 1):
-            for a in range(2 ** i):
-                for b in range(2 ** i):
-                    in_toks, out_toks = self.args_to_tokens(a, b)
-                    a_str, b_str = ''.join([str(t) for t in in_toks])[1:-1].split(str(self.token_to_idx['+']))
-
-                    a_str = '0' * (i - len(a_str)) + a_str
-                    b_str = '0' * (i - len(b_str)) + b_str
-
-                    if self.filter != None and (self._check_match(a_str, 'arg1') or self._check_match(b_str, 'arg2')):
-                        continue
-
-                    if self.little_endian:
-                        in_str = a_str[::-1] + '+' + b_str[::-1]
-                    else:
-                        in_str = a_str + '+' + b_str
-
-                    in_toks = [self.end_token] + list(in_str) + [self.end_token]
-                    in_toks = [self.token_to_idx[t] for t in in_toks]
-                    all_examples.append((in_toks, out_toks))
+            out_val = np.sum(self.tokens_to_args(in_toks))
+            if not self.onehot_out:
+                out_val = self.args_to_tokens(out_val, args_only=True)
+            all_examples.append((in_toks, out_val))
         
         return all_examples
 
-    # TODO: fails for 0's
+    # TODO: fails for 0's; unused for now
     def _check_match(self, tok_str, arg_str):
         arg = int(tok_str, 2)
         for op, n_zeros in self.filter[arg_str]:
@@ -77,20 +81,24 @@ class BinaryAdditionDataset(Dataset):
 
         return False
     
-    def args_to_tokens(self, *args):
+    def args_to_tokens(self, *args, with_end=True, args_only=False):
         answer = np.sum(args)
         if self.little_endian:
             in_str = '+'.join([f'{a:b}'[::-1] for a in args])
         else:
             in_str = '+'.join([f'{a:b}' for a in args])
-        in_toks = [self.end_token] + list(in_str) + [self.end_token]
+        in_toks = [self.end_token] * with_end + list(in_str) + [self.end_token] * with_end
+        in_toks = [self.token_to_idx[t] for t in in_toks]
+
+        if args_only:
+            return in_toks
 
         if self.little_endian:
-            out_toks = [self.end_token] + list(f'{answer:b}'[::-1]) + [self.end_token]
+            out_toks = list(f'{answer:b}'[::-1])
         else:
-            out_toks = [self.end_token] + list(f'{answer:b}') + [self.end_token]
-
-        in_toks = [self.token_to_idx[t] for t in in_toks]
+            out_toks = list(f'{answer:b}')
+        
+        out_toks = [self.end_token] * with_end + out_toks + [self.end_token] * with_end
         out_toks = [self.token_to_idx[t] for t in out_toks]
         return in_toks, out_toks
     
@@ -121,9 +129,13 @@ class BinaryAdditionDataset(Dataset):
     def pad_collate(self, batch):
         xs, ys = zip(*batch)
         pad_id = self.token_to_idx[self.pad_token]
-        xs_pad = pad_sequence(xs, batch_first=True, padding_value=pad_id)
-        ys_pad = pad_sequence(ys, batch_first=True, padding_value=pad_id)
-        return xs_pad, ys_pad
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+
+        if self.onehot_out:
+            ys_out = torch.stack(ys)
+        else:
+            ys_out = pad_sequence(ys, batch_first=True, padding_value=pad_id)
+        return xs_out, ys_out
 
     def __getitem__(self, idx):
         x, y = self.examples[idx]
