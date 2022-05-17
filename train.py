@@ -19,7 +19,7 @@ from model import *
 
 # <codecell>
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, little_endian=False, op_filter=None) -> None:
+    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, op_filter=None) -> None:
         """
         filter template:
 
@@ -41,9 +41,12 @@ class BinaryAdditionDataset(Dataset):
         self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
 
         self.examples = []
-        for i in (np.arange(max_args) + 1):
-            exs = self._exhaustive_enum(i)
-            self.examples.extend(exs)
+        if max_only:
+            self.examples.extend(self._exhaustive_enum(self.max_args))
+        else:
+            for i in (np.arange(max_args) + 1):
+                exs = self._exhaustive_enum(i)
+                self.examples.extend(exs)
     
     def _exhaustive_enum(self, n_args):
         all_args = []
@@ -146,7 +149,12 @@ class BinaryAdditionDataset(Dataset):
 
 
 # <codecell>
-ds = BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, little_endian=False, op_filter={
+# TODO: try without using fixed max args
+ds = BinaryAdditionDataset(n_bits=2, 
+                           onehot_out=True, 
+                           max_args=3, 
+                        #    max_only=True, 
+                           little_endian=False, op_filter={
     # 'arg1': [(6, [0, 1, 2, 3])],
     'arg1': [],
     'arg2': [],
@@ -157,6 +165,10 @@ it = iter(ds)
 for _, val in zip(range(300), iter(ds)):
     print(val)
 
+model = BinaryAdditionFlatRNN(
+    max_arg=9,
+    embedding_size=5,
+    hidden_size=100).cuda()
 
 # <codecell>
 test_split = 0
@@ -170,38 +182,18 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-model = BinaryAdditionFlatRNN(
-    max_arg=9,
-    embedding_size=5,
-    hidden_size=5).cuda()
-model.load('save/hid5_50k_vargs3_rnn_flat')
+# model = BinaryAdditionFlatReservoirRNN(
+#     max_arg=9,
+#     n_reservoir_layers=2,
+#     embedding_size=5,
+#     hidden_size=100).cuda()
+# model.load('save/hid5_50k_vargs3_rnn_flat')
 # model.cuda()
 # model.train()
 
 # <codecell>
 ### TRAINING
-# n_epochs = 128000
-@torch.no_grad()
-def compute_arithmetic_acc_flat(model, test_dl, ds):
-    preds, targets = [], []
-    total_correct = 0
-    total_count = 0
-
-    for input_batch, output_batch in test_dl:
-        for input_seq, targets in zip(input_batch, output_batch):
-            input_seq = input_seq.unsqueeze(0).cuda()
-            targets = targets.cpu().numpy()
-
-            logits = model(input_seq)
-            preds = logits.cpu().numpy().argmax(axis=-1)
-
-            total_correct += np.sum(preds == targets)
-            total_count += 1
-    
-    return total_correct / total_count
-
-
-n_epochs = 50000
+n_epochs = 30000
 
 optimizer = Adam(model.parameters(), lr=1e-4)
 
@@ -278,7 +270,7 @@ plt.legend()
 
 # <codecell>
 ### SIMPLE EVALUATION
-model.cpu()
+model.cuda()
 
 @torch.no_grad()
 def print_test_case(ds, model, args):
@@ -332,9 +324,9 @@ def print_test_case_direct(ds, model, in_toks, out_toks):
 
     seq = in_toks
     if type(seq) != torch.Tensor:
-        seq = torch.tensor(in_toks)
+        seq = torch.tensor(in_toks, device='cuda')
 
-    pred_seq = model.generate(seq)
+    pred_seq = model.generate(seq.cuda())
     # result = ds.tokens_to_args(pred_seq)
     result = pred_seq
     result = result[0] if result != None else None
@@ -405,7 +397,7 @@ print(f'Total acc: {correct / total:.4f}')
 
 print_test_case_direct(ds, model,
     # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
-    [3, 1, 2, 0, 1, 3],
+    [3, 1, 2, 0, 1, 2, 1, 2, 1, 2, 1, 3],
     [3,3]
 )
 
@@ -416,7 +408,7 @@ print_test_case_direct(ds, model,
 
 
 # <codecell>
-model.save('save/hid5_50k_vargs3_rnn_flat')
+model.save('save/hid5_50k_vargs3_rnn_flat_resv')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -443,14 +435,13 @@ test_seqs = [
     # [3, 0, 1, 2, 0, 0, 3],
 
     # 2 block
-    [3, 1, 0, 2, 1, 0, 3],
     # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
-    # [3, 0, 1, 0, 3],
-    # [3, 0, 0, 0, 0, 1, 0, 2, 0, 3],
-    [3, 1, 2, 1, 2, 1, 2, 1, 3],
-    [3, 1, 1, 3]
+    [3, 0, 1, 0, 3],
+    [3, 0, 0, 0, 0, 1, 0, 2, 1, 3],
+    # [3, 1, 2, 1, 2, 1, 2, 1, 3],
+    # [3, 1, 1, 3]
     # [3, 0, 1, 2, 0, 1, 3],
     # [3, 0, 0, 2, 1, 1, 3],
     # [3, 1, 1, 2, 0, 0, 3],
@@ -501,8 +492,10 @@ for seq, out in ds:
     point = info['enc']['hidden'][-1].numpy()
     all_points.append(point)
 
-    lab_true = ds.tokens_to_args(out)
-    lab_pred = ds.tokens_to_args(info['out'])
+    # lab_true = ds.tokens_to_args(out)
+    # lab_pred = ds.tokens_to_args(info['out'])
+    lab_true = [out]
+    lab_pred = [info['out']]
     all_labs_true.append(lab_true[0])
     all_labs_pred.append(lab_pred[0])
 

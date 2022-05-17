@@ -11,7 +11,7 @@ import numpy as np
 
 import torch
 from torch import nn
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.utils.data import Dataset
 
 
@@ -601,6 +601,264 @@ class BinaryAdditionFlatRNN(nn.Module):
         self.eval()
     
 
+class BinaryAdditionFlatReservoirRNN(nn.Module):
+    def __init__(self, max_arg, num_ops=5, end_idx=3, padding_idx=4, embedding_size=5, hidden_size=100, n_layers=1, n_reservoir_layers=2) -> None:
+        super().__init__()
+
+        self.max_arg = max_arg
+        self.num_ops = num_ops
+        self.end_idx = end_idx
+        self.padding_idx = padding_idx
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+        self.n_reservoir_layers = n_reservoir_layers
+
+        self.embedding = nn.Embedding(self.num_ops, self.embedding_size)
+        self.encoder_rnn = nn.RNN(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers,
+            batch_first=True,
+        )
+
+        for i in range(n_reservoir_layers):
+            setattr(self, f'reservoir_l{i}', nn.Linear(self.hidden_size, self.hidden_size))
+
+        self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)
+
+        # freeze encoder rnn
+        for param in self.encoder_rnn.parameters():
+            param.requires_grad = False
+
+    
+    def encode(self, input_seq):
+        input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
+        input_emb = self.embedding(input_seq)
+        input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
+        _, enc_h = self.encoder_rnn(input_packed)
+
+        return enc_h[-1,...]   # last hidden layer
+    
+    def forward(self, input_seq):
+        enc_h = self.encode(input_seq)
+
+        for i in range(self.n_reservoir_layers):
+            layer = getattr(self, f'reservoir_l{i}')
+            # TODO: note this is purely linear
+            enc_h = layer(enc_h)
+
+        logits = self.readout(enc_h)
+        return logits
+    
+    def loss(self, logits, targets):
+        return nn.functional.cross_entropy(logits, targets)
+    
+    def trace(self, input_seq):
+        e = self.encoder_rnn
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'hidden': [],
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+
+            in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
+            hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
+            hidden = torch.tanh(in_act + hid_act)
+            info['enc']['hidden'].append(hidden)
+        
+        # TODO: test
+        hidden = hidden.T
+        for i in range(self.n_reservoir_layers):
+            layer = getattr(self, f'reservoir_l{i}')
+            hidden = layer(hidden)
+
+        logits = self.readout(hidden).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
+
+    @torch.no_grad()
+    def generate(self, input_seq):
+        input_seq = input_seq.unsqueeze(0)
+        logits = self.forward(input_seq)
+        return torch.argmax(logits, dim=-1)
+    
+    def save(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        if not path.exists():
+            path.mkdir(parents=True)
+
+        torch.save(self.state_dict(), path / 'weights.pt')
+        params = {
+            'max_arg': self.max_arg,
+            'embedding_size': self.embedding_size,
+            'hidden_size': self.hidden_size,
+            'n_layers': self.n_layers,
+            'n_reservoir_layers': self.n_reservoir_layers
+        }
+
+        with (path / 'params.json').open('w') as fp:
+            json.dump(params, fp)
+    
+    def load(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        with (path / 'params.json').open() as fp:
+            params = json.load(fp)
+        
+        self.__init__(**params)
+        weights = torch.load(path / 'weights.pt')
+        self.load_state_dict(weights)
+        self.eval()
+
+
+# TODO: make more efficient
+class LinearRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.ih = nn.Linear(input_size, hidden_size)
+        self.hh = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, input):
+        seqs, lens = pad_packed_sequence(input, batch_first=True)
+
+        all_hidden = []
+        for s, l in zip(seqs, lens):
+            hidden = torch.zeros(1, self.hidden_size).cuda()
+            for idx in range(l):
+                hidden = self.ih(s[idx,:]) + self.hh(hidden)
+            
+            all_hidden.append(hidden)
+
+        return None, torch.concat(all_hidden, dim=0)
+
+
+# TODO: may not be fully adapted
+class BinaryAdditionLinearFlatRNN(nn.Module):
+    def __init__(self, max_arg, num_ops=5, end_idx=3, padding_idx=4, embedding_size=5, hidden_size=100, n_layers=1) -> None:
+        super().__init__()
+
+        self.max_arg = max_arg
+        self.num_ops = num_ops
+        self.end_idx = end_idx
+        self.padding_idx = padding_idx
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+
+        self.embedding = nn.Embedding(self.num_ops, self.embedding_size)
+        self.encoder_rnn = LinearRNN(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers,
+        )
+
+        self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)
+    
+    def encode(self, input_seq):
+        input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
+        input_emb = self.embedding(input_seq)
+        input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
+        _, enc_h = self.encoder_rnn(input_packed)
+
+        return enc_h   # last hidden layer
+    
+    def forward(self, input_seq):
+        enc_h = self.encode(input_seq)
+        logits = self.readout(enc_h)
+        return logits
+    
+    def loss(self, logits, targets):
+        return nn.functional.cross_entropy(logits, targets)
+    
+    def trace(self, input_seq):
+        e = self.encoder_rnn
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'hidden': [],
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+
+            in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
+            hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
+            hidden = torch.tanh(in_act + hid_act)
+            info['enc']['hidden'].append(hidden)
+        
+        logits = self.readout(hidden.T).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
+
+    @torch.no_grad()
+    def generate(self, input_seq):
+        input_seq = input_seq.unsqueeze(0)
+        h = self.encode(input_seq)
+        logits = self.readout(h)
+        return torch.argmax(logits, dim=-1)
+    
+    def save(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        if not path.exists():
+            path.mkdir(parents=True)
+
+        torch.save(self.state_dict(), path / 'weights.pt')
+        params = {
+            'max_arg': self.max_arg,
+            'embedding_size': self.embedding_size,
+            'hidden_size': self.hidden_size,
+            'n_layers': self.n_layers
+        }
+
+        with (path / 'params.json').open('w') as fp:
+            json.dump(params, fp)
+    
+    def load(self, path):
+        if type(path) == str:
+            path = Path(path)
+
+        with (path / 'params.json').open() as fp:
+            params = json.load(fp)
+        
+        self.__init__(**params)
+        weights = torch.load(path / 'weights.pt')
+        self.load_state_dict(weights)
+        self.eval()
+
+        
 @torch.no_grad()
 def compute_test_loss(model, test_dl):
     all_preds, all_targs = [], []
@@ -690,10 +948,7 @@ def compute_arithmetic_acc_flat(model, test_dl, ds):
             logits = model(input_seq)
             preds = logits.cpu().numpy().argmax(axis=-1)
 
-            guess = ds.tokens_to_args(preds)
-            answer = ds.tokens_to_args(targets)
-
-            total_correct += int(guess == answer)
+            total_correct += np.sum(preds == targets)
             total_count += 1
     
     return total_correct / total_count
