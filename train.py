@@ -165,11 +165,6 @@ it = iter(ds)
 for _, val in zip(range(300), iter(ds)):
     print(val)
 
-model = BinaryAdditionFlatRNN(
-    max_arg=9,
-    embedding_size=5,
-    hidden_size=100).cuda()
-
 # <codecell>
 test_split = 0
 test_len = int(len(ds) * test_split)
@@ -182,18 +177,18 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-# model = BinaryAdditionFlatReservoirRNN(
-#     max_arg=9,
-#     n_reservoir_layers=2,
-#     embedding_size=5,
-#     hidden_size=100).cuda()
-# model.load('save/hid5_50k_vargs3_rnn_flat')
+model = BinaryAdditionFlatReservoirRNN(
+    max_arg=9,
+    embedding_size=5,
+    hidden_size=100,
+    n_reservoir_layers=2).cuda()
+# model.load('save/hid5_50k_vargs3_rnn_flat_resv')
 # model.cuda()
 # model.train()
 
 # <codecell>
 ### TRAINING
-n_epochs = 30000
+n_epochs = 128000
 
 optimizer = Adam(model.parameters(), lr=1e-4)
 
@@ -230,7 +225,7 @@ for e in range(n_epochs):
         curr_loss = running_loss / running_length
         test_loss, test_acc = compute_test_loss_flat(model, test_dl)
         # arith_acc_with_teacher, arith_acc_no_teacher = compute_arithmetic_acc(model, test_dl, ds)
-        arith_acc_with_teacher = compute_arithmetic_acc_flat(model, test_dl, ds)
+        arith_acc_with_teacher = compute_arithmetic_acc_flat(model, test_dl)
 
         print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc_with_teacher: {arith_acc_with_teacher:.4f} ')
         losses['train'].append(curr_loss)
@@ -249,7 +244,6 @@ print('done!')
 
 # <codecell>
 epochs = (np.arange(0, n_epochs // eval_every) + 1) * eval_every
-
 plt.plot(epochs, all_train_loss, label='train loss')
 plt.plot(epochs, all_test_loss, label='test loss')
 plt.xlabel('Epoch')

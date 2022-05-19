@@ -614,7 +614,7 @@ class BinaryAdditionFlatRNN(nn.Module):
     
 
 class BinaryAdditionFlatReservoirRNN(nn.Module):
-    def __init__(self, max_arg, num_ops=5, end_idx=3, padding_idx=4, embedding_size=5, hidden_size=100, n_layers=1, n_reservoir_layers=2) -> None:
+    def __init__(self, max_arg, num_ops=5, end_idx=3, padding_idx=4, embedding_size=5, hidden_size=100, n_layers=1, n_reservoir_layers=2, activation='linear') -> None:
         super().__init__()
 
         self.max_arg = max_arg
@@ -625,6 +625,17 @@ class BinaryAdditionFlatReservoirRNN(nn.Module):
         self.hidden_size = hidden_size
         self.n_layers = n_layers
         self.n_reservoir_layers = n_reservoir_layers
+
+        self.activ = None
+        self.activ_name = activation
+        if activation == 'linear':
+            self.activ = nn.Linear()
+        elif activation == 'tanh':
+            self.activ = torch.tanh
+        elif activation == 'relu':
+            self.activ = torch.relu
+        else:
+            raise ValueError('unrecognized activation: ', activation)
 
         self.embedding = nn.Embedding(self.num_ops, self.embedding_size)
         self.encoder_rnn = nn.RNN(
@@ -657,7 +668,7 @@ class BinaryAdditionFlatReservoirRNN(nn.Module):
 
         for i in range(self.n_reservoir_layers):
             layer = getattr(self, f'reservoir_l{i}')
-            # TODO: note this is purely linear
+            enc_h = self.activ(layer(enc_h))
             enc_h = layer(enc_h)
 
         logits = self.readout(enc_h)
@@ -692,11 +703,10 @@ class BinaryAdditionFlatReservoirRNN(nn.Module):
             hidden = torch.tanh(in_act + hid_act)
             info['enc']['hidden'].append(hidden)
         
-        # TODO: test
         hidden = hidden.T
         for i in range(self.n_reservoir_layers):
             layer = getattr(self, f'reservoir_l{i}')
-            hidden = layer(hidden)
+            hidden = self.activ(layer(hidden))
 
         logits = self.readout(hidden).squeeze()
         info['logits'] = logits
@@ -722,7 +732,8 @@ class BinaryAdditionFlatReservoirRNN(nn.Module):
             'embedding_size': self.embedding_size,
             'hidden_size': self.hidden_size,
             'n_layers': self.n_layers,
-            'n_reservoir_layers': self.n_reservoir_layers
+            'n_reservoir_layers': self.n_reservoir_layers,
+            'activation': self.activ_name
         }
 
         with (path / 'params.json').open('w') as fp:
@@ -910,7 +921,8 @@ def compute_test_loss_flat(model, test_dl):
 
         
 @torch.no_grad()
-def compute_arithmetic_acc(model, test_dl, ds):
+def compute_arithmetic_acc(model, test_dl):
+    ds = test_dl.ds
     preds, targets = [], []
     total_correct = 0
     total_correct_no_teacher = 0
@@ -947,7 +959,7 @@ def compute_arithmetic_acc(model, test_dl, ds):
 
 
 @torch.no_grad()
-def compute_arithmetic_acc_flat(model, test_dl, ds):
+def compute_arithmetic_acc_flat(model, test_dl):
     preds, targets = [], []
     total_correct = 0
     total_count = 0
