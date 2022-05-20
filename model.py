@@ -19,14 +19,11 @@ from torch.optim import Adam
 from torch.utils.data import Dataset
 
 
-class BinaryAdditionDataset(Dataset):
-    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, op_filter=None) -> None:
+class BinaryAdditionDataset(Dataset):  # TODO: make filter
+    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, filter_=None) -> None:
         """
-        filter template:
-
-        op_filter = {
-            arg1: [(op, [allowed_zero's]), (ditto)],
-            arg2: [ditto]
+        filter = {
+            'max_value': max value representable by expression
         }
         """
         super().__init__()
@@ -34,7 +31,7 @@ class BinaryAdditionDataset(Dataset):
         self.onehot_out = onehot_out
         self.max_args = max_args
         self.little_endian = little_endian
-        self.filter = op_filter
+        self.filter = filter_ if filter_ != None else {}
 
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
@@ -67,22 +64,14 @@ class BinaryAdditionDataset(Dataset):
             in_toks = (end_idx,) + in_toks + (end_idx,)
 
             out_val = np.sum(self.tokens_to_args(in_toks))
+            if 'max_value' in self.filter and self.filter['max_value'] < out_val:
+                continue
             if not self.onehot_out:
                 out_val = self.args_to_tokens(out_val, args_only=True)
             all_examples.append((in_toks, out_val))
         
         return all_examples
 
-    # TODO: fails for 0's; unused for now
-    def _check_match(self, tok_str, arg_str):
-        arg = int(tok_str, 2)
-        for op, n_zeros in self.filter[arg_str]:
-            for n in n_zeros:
-                if arg == op and tok_str.startswith(n * '0' + '1'):
-                    return True
-
-        return False
-    
     def args_to_tokens(self, *args, with_end=True, args_only=False):
         answer = np.sum(args)
         if self.little_endian:
