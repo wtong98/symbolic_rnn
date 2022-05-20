@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.decomposition import PCA
 import torch
-from torch.optim import Adam
 from torch.utils.data import DataLoader, random_split
 
 from model import *
@@ -177,90 +176,45 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-model = BinaryAdditionFlatReservoirRNN(
-    max_arg=9,
+model = RnnClassifier(
+    max_arg=10,
     embedding_size=5,
-    hidden_size=100,
-    n_reservoir_layers=2).cuda()
+    hidden_size=100).cuda()
 # model.load('save/hid5_50k_vargs3_rnn_flat_resv')
 # model.cuda()
 # model.train()
 
 # <codecell>
 ### TRAINING
-n_epochs = 128000
-
-optimizer = Adam(model.parameters(), lr=1e-4)
-
-losses = {'train': [], 'test': [], 'acc': []}
-running_loss = 0
-running_length = 0
-
-all_train_loss = []
-all_test_loss = []
-all_test_tok_acc = []
-all_test_arith_acc = []
-all_test_arith_acc_no_teacher = []
-
-eval_every = 100
-
-for e in range(n_epochs):
-    for i, (input_seq, output_seq) in enumerate(train_dl):
-        input_seq = input_seq.cuda()
-        # output_seq = output_seq.cuda()
-        targets = output_seq.cuda()
-
-        optimizer.zero_grad()
-
-        # logits, targets = model(input_seq, output_seq)
-        logits = model(input_seq)
-        loss = model.loss(logits, targets)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-        running_length += 1
-
-    if (e+1) % eval_every == 0:
-        curr_loss = running_loss / running_length
-        test_loss, test_acc = compute_test_loss_flat(model, test_dl)
-        # arith_acc_with_teacher, arith_acc_no_teacher = compute_arithmetic_acc(model, test_dl, ds)
-        arith_acc_with_teacher = compute_arithmetic_acc_flat(model, test_dl)
-
-        print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_acc:.4f}   arith_acc_with_teacher: {arith_acc_with_teacher:.4f} ')
-        losses['train'].append(curr_loss)
-        losses['test'].append(test_loss)
-        losses['acc'].append(test_acc)
-        running_loss = 0
-        running_length = 0
-
-        all_train_loss.append(curr_loss)
-        all_test_loss.append(test_loss)
-        all_test_tok_acc.append(test_acc)
-        all_test_arith_acc.append(arith_acc_with_teacher)
-        # all_test_arith_acc_no_teacher.append(arith_acc_no_teacher)
+n_epochs = 100000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
 
 print('done!')
 
 # <codecell>
-epochs = (np.arange(0, n_epochs // eval_every) + 1) * eval_every
-plt.plot(epochs, all_train_loss, label='train loss')
-plt.plot(epochs, all_test_loss, label='test loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
+eval_every = 100
+def make_plots(losses, filename=None, eval_every=100):
+    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
-# plt.savefig('save/fig/micro_loss_curve.png')
+    epochs = np.arange(len(losses['train'])) * eval_every
+    axs[0].plot(epochs, losses['train'], label='train loss')
+    axs[0].plot(epochs, losses['test'], label='test loss')
+    axs[0].set_xlabel('Epoch')
+    axs[0].set_ylabel('Loss')
+    axs[0].legend()
 
-# <codecell>
-plt.plot(epochs, all_test_tok_acc, label='token-wise accuracy')
-plt.plot(epochs, all_test_arith_acc, label='expression-wise accuracy')
-# plt.plot(epochs, all_test_arith_acc_no_teacher, label='expression-wise accuracy (no teacher)')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
+    axs[1].plot(epochs, losses['tok_acc'], label='token-wise accuracy')
+    axs[1].plot(epochs, losses['arith_acc'], label='expression-wise accuracy')
+    axs[1].set_xlabel('Epoch')
+    axs[1].set_ylabel('Accuracy')
+    axs[1].legend()
 
-# plt.savefig('save/fig/micro_acc_curve.png')
+    fig.tight_layout()
+
+    if filename != None:
+        plt.savefig(filename)
+
+make_plots(losses)
 
 # <codecell>
 ### SIMPLE EVALUATION
@@ -391,7 +345,7 @@ print(f'Total acc: {correct / total:.4f}')
 
 print_test_case_direct(ds, model,
     # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
-    [3, 1, 2, 0, 1, 2, 1, 2, 1, 2, 1, 3],
+    [3, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 3],
     [3,3]
 )
 

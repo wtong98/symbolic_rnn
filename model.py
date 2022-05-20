@@ -559,11 +559,12 @@ class RnnClassifier(Model):
     def __init__(self, max_arg, embedding_size=5, hidden_size=100, n_layers=1, **kwargs) -> None:
         super().__init__(**kwargs)
 
+        self.max_arg = max_arg
         self.embedding_size = embedding_size
         self.hidden_size = hidden_size
         self.n_layers = n_layers
 
-        self.embedding = nn.Embedding(self.num_ops, self.embedding_size)
+        self.embedding = nn.Embedding(self.vocab_size, self.embedding_size)
         self.encoder_rnn = nn.RNN(
             input_size=self.embedding_size,
             hidden_size=self.hidden_size,
@@ -672,7 +673,7 @@ class ReservoirClassifier(RnnClassifier):
         self.activ = None
         self.activ_name = activation
         if activation == 'linear':
-            self.activ = nn.Linear()
+            self.activ = nn.Identity()
         elif activation == 'tanh':
             self.activ = torch.tanh
         elif activation == 'relu':
