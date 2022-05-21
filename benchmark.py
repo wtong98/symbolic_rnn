@@ -138,8 +138,8 @@ xs = np.arange(n_end_args - 3)
 
 for (name, result), offset in zip(results.items(), offsets):
     result = np.array(result)
-    means = np.mean(result, axis=1)
-    serr = np.std(result, axis=1) / np.sqrt(n_iter)
+    means = np.mean(result, axis=0)
+    serr = np.std(result, axis=0) / np.sqrt(n_iter)
 
     plt.bar(xs - offset, means, bw, yerr=serr, label=name)
 
