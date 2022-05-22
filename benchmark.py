@@ -78,7 +78,7 @@ def make_plots(losses, filename=None, eval_every=100):
 n_iter = 5
 max_value = 9
 n_end_args = 10
-n_epochs = 10000
+n_epochs = 15000
 eval_every = 100
 optim_lr = 1e-4
 
@@ -148,6 +148,6 @@ plt.xlabel('Max number of args')
 plt.ylabel('Accuracy')
 
 plt.legend()
-
+plt.savefig(str(fig_dir / 'comparison.png'))
 
 # %%
