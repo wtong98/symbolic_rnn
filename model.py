@@ -4,7 +4,6 @@ Model and dataset definitions
 author: William Tong (wtong@g.harvard.edu)
 """
 # <codecell>
-from ast import Mod
 import itertools
 import functools
 import json
@@ -543,7 +542,6 @@ class Seq2SeqLstmModel(Seq2SeqRnnModel):
         return torch.cat(gen_out, dim=-1).squeeze(dim=0)
 
 
-# TODO: untested
 class RnnClassifier(Model):
     def __init__(self, max_arg, embedding_size=5, hidden_size=100, n_layers=1, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -653,7 +651,6 @@ class RnnClassifier(Model):
         return loss, tok_acc, tok_acc
 
 
-#TODO: untested
 class ReservoirClassifier(RnnClassifier):
     def __init__(self, max_arg, n_reservoir_layers=2, activation='linear', **kwargs) -> None:
         super().__init__(max_arg, **kwargs)

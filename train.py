@@ -162,8 +162,46 @@ if test_split == 0:
 train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
-model = RnnClassifier(
-    max_arg=10,
+# <codecell>
+class LinearRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.ih = nn.Linear(input_size, hidden_size)
+        self.hh = nn.Linear(hidden_size, hidden_size)
+
+    def forward(self, input_pack):
+        dev = next(self.parameters()).device
+
+        data, batch_sizes, _, unsort_idxs = input_pack
+        batch_idxs = batch_sizes.cumsum(0)
+        batches = torch.tensor_split(data, batch_idxs[:-1])
+
+        hidden = torch.zeros(batch_sizes[0], self.hidden_size).to(dev)
+        for b, size in zip(batches, batch_sizes):
+            hidden_chunk = self.ih(b) + self.hh(hidden[:size,...])
+            hidden = torch.cat((hidden_chunk, hidden[size:,...]), dim=0)
+
+        hidden = hidden[unsort_idxs]
+        return None, hidden.unsqueeze(0)
+
+class LinearRnnClassifier(RnnClassifier):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+        self.encoder_rnn = LinearRNN(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers,
+        )
+    
+    def trace(self, input_seq):
+        raise NotImplementedError
+
+# TODO: does not seem capable of achieving 100%? <-- STOPPED HERE
+model = LinearRnnClassifier(
+    max_arg=9,
     embedding_size=5,
     hidden_size=100).cuda()
 # model.load('save/hid5_50k_vargs3_rnn_flat_resv')
