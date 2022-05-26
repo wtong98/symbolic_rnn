@@ -18,7 +18,7 @@ from torch.optim import Adam
 from torch.utils.data import Dataset
 
 
-class BinaryAdditionDataset(Dataset):  # TODO: make filter
+class BinaryAdditionDataset(Dataset):
     def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, filter_=None) -> None:
         """
         filter = {
@@ -30,7 +30,7 @@ class BinaryAdditionDataset(Dataset):  # TODO: make filter
         self.onehot_out = onehot_out
         self.max_args = max_args
         self.little_endian = little_endian
-        self.filter = filter_ if filter_ != None else {}
+        self.filter = filter_ or {}
 
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
@@ -732,7 +732,6 @@ class ReservoirClassifier(RnnClassifier):
         })
 
 
-# TODO: make more efficient
 class LinearRNN(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers):
         super().__init__()
@@ -741,24 +740,25 @@ class LinearRNN(nn.Module):
         self.ih = nn.Linear(input_size, hidden_size)
         self.hh = nn.Linear(hidden_size, hidden_size)
 
-    def forward(self, input):
-        seqs, lens = pad_packed_sequence(input, batch_first=True)
+    def forward(self, input_pack):
+        dev = next(self.parameters()).device
 
-        all_hidden = []
-        for s, l in zip(seqs, lens):
-            hidden = torch.zeros(1, self.hidden_size).cuda()
-            for idx in range(l):
-                hidden = self.ih(s[idx,:]) + self.hh(hidden)
-            
-            all_hidden.append(hidden)
+        data, batch_sizes, _, unsort_idxs = input_pack
+        batch_idxs = batch_sizes.cumsum(0)
+        batches = torch.tensor_split(data, batch_idxs[:-1])
 
-        return None, torch.concat(all_hidden, dim=0)
+        hidden = torch.zeros(batch_sizes[0], self.hidden_size).to(dev)
+        for b, size in zip(batches, batch_sizes):
+            hidden_chunk = self.ih(b) + self.hh(hidden[:size,...])
+            hidden = torch.cat((hidden_chunk, hidden[size:,...]), dim=0)
+
+        hidden = hidden[unsort_idxs]
+        return None, hidden.unsqueeze(0)
 
 
-# TODO: untested
 class LinearRnnClassifier(RnnClassifier):
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
 
         self.encoder_rnn = LinearRNN(
             input_size=self.embedding_size,

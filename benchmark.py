@@ -75,11 +75,18 @@ def make_plots(losses, filename=None, eval_every=100):
 
 
 # <codecell>
-n_iter = 5
+# n_iter = 5
+# max_value = 9
+# n_end_args = 10
+# n_epochs = 15000
+# eval_every = 100
+# optim_lr = 1e-4
+n_iter = 1
 max_value = 9
 n_end_args = 10
-n_epochs = 15000
-eval_every = 100
+arch_width=10
+n_epochs = 150
+eval_every = 10
 optim_lr = 1e-4
 
 fig_dir = Path('save/fig/benchmark')
@@ -91,22 +98,32 @@ TestCase = namedtuple('TestCase', ['name', 'model', 'ds', 'n_epochs'])
 def make_cases():
     cases = [
         TestCase(name='Flat RNN (full dataset)',
-                model=RnnClassifier(max_value), 
+                model=RnnClassifier(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN (max args only)',
-                model=RnnClassifier(max_value), 
+                model=RnnClassifier(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN Reservoir (full dataset)',
-                model=ReservoirClassifier(max_value), 
+                model=ReservoirClassifier(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN Reservoir (max args only)',
-                model=ReservoirClassifier(max_value), 
+                model=ReservoirClassifier(max_value, hidden_size=arch_width), 
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
+                n_epochs=n_epochs),
+
+        TestCase(name='Linear RNN (full dataset)',
+                model=LinearRnnClassifier(max_value, hidden_size=arch_width), 
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
+                n_epochs=n_epochs),
+
+        TestCase(name='Linear RNN (max args only)',
+                model=LinearRnnClassifier(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
                 n_epochs=n_epochs),
     ]
@@ -132,8 +149,8 @@ for i in tqdm(range(n_iter)):
         
 
 # <codecell>
-bw = 0.2
-offsets = bw * np.array([-2, -1, 0, 1]) + bw / 2
+bw = 0.1
+offsets = bw * np.array([-3, -2, -1, 0, 1, 2]) + bw / 2
 xs = np.arange(n_end_args - 3)
 
 for (name, result), offset in zip(results.items(), offsets):
