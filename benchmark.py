@@ -71,6 +71,7 @@ def make_plots(losses, filename=None, eval_every=100):
 
     if filename != None:
         plt.savefig(filename)
+        plt.clf()
 
 
 
@@ -166,5 +167,6 @@ plt.ylabel('Accuracy')
 
 plt.legend()
 plt.savefig(str(fig_dir / 'comparison.png'))
+plt.clf()
 
 # %%
