@@ -76,18 +76,12 @@ def make_plots(losses, filename=None, eval_every=100):
 
 
 # <codecell>
-# n_iter = 5
-# max_value = 9
-# n_end_args = 10
-# n_epochs = 15000
-# eval_every = 100
-# optim_lr = 1e-4
-n_iter = 1
+n_iter = 5
+arch_width = 100
 max_value = 9
 n_end_args = 10
-arch_width=10
-n_epochs = 150
-eval_every = 10
+n_epochs = 30000
+eval_every = 100
 optim_lr = 1e-4
 
 fig_dir = Path('save/fig/benchmark')
@@ -119,12 +113,12 @@ def make_cases():
                 n_epochs=n_epochs),
 
         TestCase(name='Linear RNN (full dataset)',
-                model=LinearRnnClassifier(max_value, hidden_size=arch_width), 
+                model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Linear RNN (max args only)',
-                model=LinearRnnClassifier(max_value, hidden_size=arch_width), 
+                model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
                 n_epochs=n_epochs),
     ]
