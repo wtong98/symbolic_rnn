@@ -28,7 +28,7 @@ def test_long_sequence(model, n_start_args=4, n_end_args=10, max_value=9):
         if n in cached_ds:
             dl = cached_ds[n]
         else:
-            ds = BinaryAdditionDataset(n_bits=2, max_args=n, onehot_out=True, max_only=True, filter_={'max_value': max_value})
+            ds = BinaryAdditionDataset(n_bits=2, max_args=n, onehot_out=True, max_only=True, add_noop=True, max_noop=5, max_noop_only=True, filter_={'max_value': max_value})
             dl = DataLoader(ds, batch_size=32, pin_memory=True, num_workers=0, collate_fn=ds.pad_collate)
             cached_ds[n] = dl
 
@@ -84,7 +84,7 @@ n_epochs = 30000
 eval_every = 100
 optim_lr = 1e-4
 
-fig_dir = Path('save/fig/benchmark')
+fig_dir = Path('save/fig/benchmark_noop')
 if not fig_dir.exists():
     fig_dir.mkdir(parents=True)
 
@@ -94,32 +94,32 @@ def make_cases():
     cases = [
         TestCase(name='Flat RNN (full dataset)',
                 model=RnnClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN (max args only)',
                 model=RnnClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN Reservoir (full dataset)',
                 model=ReservoirClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Flat RNN Reservoir (max args only)',
                 model=ReservoirClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
                 n_epochs=n_epochs),
 
         TestCase(name='Linear RNN (full dataset)',
                 model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=False),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
         TestCase(name='Linear RNN (max args only)',
                 model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, max_args=3, max_only=True),
+                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
                 n_epochs=n_epochs),
     ]
     

@@ -19,7 +19,10 @@ from torch.utils.data import Dataset
 
 
 class BinaryAdditionDataset(Dataset):
-    def __init__(self, n_bits=4, onehot_out=False, max_args = 2, max_only=False, little_endian=False, filter_=None) -> None:
+    def __init__(self, n_bits=4, onehot_out=False, 
+                       max_args = 2, max_only=False, 
+                       add_noop=False, max_noop=3, max_noop_only=False,
+                       little_endian=False, filter_=None) -> None:
         """
         filter = {
             'max_value': max value representable by expression
@@ -29,13 +32,20 @@ class BinaryAdditionDataset(Dataset):
         self.n_bits = n_bits
         self.onehot_out = onehot_out
         self.max_args = max_args
+        self.add_noop = add_noop
+        self.max_noop = max_noop
+        self.max_noop_only = max_noop_only
         self.little_endian = little_endian
         self.filter = filter_ or {}
 
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
-        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token]
+        self.noop_token = '_'
+        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token, self.noop_token]
         self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+
+        self.noop_idx = self.token_to_idx[self.noop_token]
+        self.plus_idx = self.token_to_idx['+']
 
         self.examples = []
         if max_only:
@@ -59,10 +69,13 @@ class BinaryAdditionDataset(Dataset):
         plus_idx = self.token_to_idx['+']
         end_idx = self.token_to_idx[self.end_token]
         for term in all_terms:
-            in_toks = functools.reduce(lambda a, b: a + (plus_idx,) + b, term)
-            in_toks = (end_idx,) + in_toks + (end_idx,)
+            noops = ()
 
-            out_val = np.sum(self.tokens_to_args(in_toks))
+            in_toks = term
+            in_toks_tmp = functools.reduce(lambda a, b: a + noops + (plus_idx,) + b, term)
+            # in_toks = (end_idx,) + in_toks + (end_idx,)  # END_IDX forcibly removed
+
+            out_val = np.sum(self.tokens_to_args(in_toks_tmp))
             if 'max_value' in self.filter and self.filter['max_value'] < out_val:
                 continue
             if not self.onehot_out:
@@ -71,6 +84,7 @@ class BinaryAdditionDataset(Dataset):
         
         return all_examples
 
+    # TODO: unify with _exhautive_enum
     def args_to_tokens(self, *args, with_end=True, args_only=False):
         answer = np.sum(args)
         if self.little_endian:
@@ -101,7 +115,7 @@ class BinaryAdditionDataset(Dataset):
         if str_toks[-1] == self.end_token:
             str_toks = str_toks[:-1]
         
-        str_args = ''.join(str_toks).split('+')
+        str_args = ''.join(str_toks).replace('_', '').split('+')
         try:
             if self.little_endian:
                 args = [int(str_a[::-1], 2) for str_a in str_args]
@@ -129,6 +143,14 @@ class BinaryAdditionDataset(Dataset):
 
     def __getitem__(self, idx):
         x, y = self.examples[idx]
+        if self.add_noop:
+            if self.max_noop_only:
+                x = functools.reduce(lambda a, b: a + self.max_noop * (self.noop_idx,) + (self.plus_idx,) + b, x) \
+                    + self.max_noop * (self.noop_idx,)
+            else:
+                x = functools.reduce(lambda a, b: a + np.random.randint(self.max_noop+1) * (self.noop_idx,) + (self.plus_idx,) + b, x) \
+                    + np.random.randint(self.max_noop+1) * (self.noop_idx,)
+
         return torch.tensor(x), torch.tensor(y)
     
     def __len__(self):
@@ -136,7 +158,7 @@ class BinaryAdditionDataset(Dataset):
 
 
 class Model(nn.Module):
-    def __init__(self, vocab_size=5, end_idx=3, padding_idx=4) -> None:
+    def __init__(self, vocab_size=6, end_idx=3, padding_idx=4) -> None:
         super().__init__()
         self.vocab_size=vocab_size
         self.end_idx = end_idx

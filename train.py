@@ -16,11 +16,153 @@ from torch.utils.data import DataLoader, random_split
 
 from model import *
 
+
+class BinaryAdditionDataset(Dataset):
+    def __init__(self, n_bits=4, onehot_out=False, 
+                       max_args = 2, max_only=False, 
+                       add_noop=False, max_noop=3, max_noop_only=False,
+                       little_endian=False, filter_=None) -> None:
+        """
+        filter = {
+            'max_value': max value representable by expression
+        }
+        """
+        super().__init__()
+        self.n_bits = n_bits
+        self.onehot_out = onehot_out
+        self.max_args = max_args
+        self.add_noop = add_noop
+        self.max_noop = max_noop
+        self.max_noop_only = max_noop_only
+        self.little_endian = little_endian
+        self.filter = filter_ or {}
+
+        self.end_token = '<END>'
+        self.pad_token = '<PAD>'
+        self.noop_token = '_'
+        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token, self.noop_token]
+        self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+
+        self.noop_idx = self.token_to_idx[self.noop_token]
+        self.plus_idx = self.token_to_idx['+']
+
+        self.examples = []
+        if max_only:
+            self.examples.extend(self._exhaustive_enum(self.max_args))
+        else:
+            for i in (np.arange(max_args) + 1):
+                exs = self._exhaustive_enum(i)
+                self.examples.extend(exs)
+    
+    def _exhaustive_enum(self, n_args):
+        all_args = []
+        for i in (np.arange(self.n_bits) + 1):
+            cart_args = i * [[0, 1]]
+            args = itertools.product(*cart_args)
+            all_args.extend(args)
+        
+        cart_terms = n_args * [all_args]
+        all_terms = itertools.product(*cart_terms)
+        
+        all_examples = []
+        plus_idx = self.token_to_idx['+']
+        end_idx = self.token_to_idx[self.end_token]
+        for term in all_terms:
+            noops = ()
+
+            in_toks = term
+            in_toks_tmp = functools.reduce(lambda a, b: a + noops + (plus_idx,) + b, term)
+            # in_toks = (end_idx,) + in_toks + (end_idx,)  # END_IDX forcibly removed
+
+            out_val = np.sum(self.tokens_to_args(in_toks_tmp))
+            if 'max_value' in self.filter and self.filter['max_value'] < out_val:
+                continue
+            if not self.onehot_out:
+                out_val = self.args_to_tokens(out_val, args_only=True)
+            all_examples.append((in_toks, out_val))
+        
+        return all_examples
+
+    # TODO: unify with _exhautive_enum
+    def args_to_tokens(self, *args, with_end=True, args_only=False):
+        answer = np.sum(args)
+        if self.little_endian:
+            in_str = '+'.join([f'{a:b}'[::-1] for a in args])
+        else:
+            in_str = '+'.join([f'{a:b}' for a in args])
+        in_toks = [self.end_token] * with_end + list(in_str) + [self.end_token] * with_end
+        in_toks = [self.token_to_idx[t] for t in in_toks]
+
+        if args_only:
+            return in_toks
+
+        if self.little_endian:
+            out_toks = list(f'{answer:b}'[::-1])
+        else:
+            out_toks = list(f'{answer:b}')
+        
+        out_toks = [self.end_token] * with_end + out_toks + [self.end_token] * with_end
+        out_toks = [self.token_to_idx[t] for t in out_toks]
+        return in_toks, out_toks
+    
+    def tokens_to_args(self, tokens, return_bin=False):
+        str_toks = [self.idx_to_token[t] for t in tokens]
+        while str_toks[-1] == self.pad_token:
+            str_toks = str_toks[:-1]
+        if str_toks[0] == self.end_token:
+            str_toks = str_toks[1:]
+        if str_toks[-1] == self.end_token:
+            str_toks = str_toks[:-1]
+        
+        str_args = ''.join(str_toks).replace('_', '').split('+')
+        try:
+            if self.little_endian:
+                args = [int(str_a[::-1], 2) for str_a in str_args]
+            else:
+                args = [int(str_a, 2) for str_a in str_args]
+        except:
+            # print('invalid tokens: ', tokens)
+            return None
+
+        if return_bin:
+            return args, str_args
+        else:
+            return args
+    
+    def pad_collate(self, batch):
+        xs, ys = zip(*batch)
+        pad_id = self.token_to_idx[self.pad_token]
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+
+        if self.onehot_out:
+            ys_out = torch.stack(ys)
+        else:
+            ys_out = pad_sequence(ys, batch_first=True, padding_value=pad_id)
+        return xs_out, ys_out
+
+    def __getitem__(self, idx):
+        x, y = self.examples[idx]
+        if self.add_noop:
+            if self.max_noop_only:
+                x = functools.reduce(lambda a, b: a + self.max_noop * (self.noop_idx,) + (self.plus_idx,) + b, x) \
+                    + self.max_noop * (self.noop_idx,)
+            else:
+                x = functools.reduce(lambda a, b: a + np.random.randint(self.max_noop+1) * (self.noop_idx,) + (self.plus_idx,) + b, x) \
+                    + np.random.randint(self.max_noop+1) * (self.noop_idx,)
+
+        # TODO: put it back together even if noops not requested
+        return torch.tensor(x), torch.tensor(y)
+    
+    def __len__(self):
+        return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
 ds = BinaryAdditionDataset(n_bits=2, 
                            onehot_out=True, 
                            max_args=3, 
+                           add_noop=True,
+                           max_noop=5,
+                        #    max_noop_only=True,
                         #    max_only=True, 
                            little_endian=False)
 
@@ -42,14 +184,15 @@ train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_c
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
-model = LinearRnnClassifier(
+model = RnnClassifier(
     max_arg=9,
     embedding_size=5,
-    hidden_size=100).cuda()
+    hidden_size=100,
+    vocab_size=6).cuda()
 
 # <codecell>
 ### TRAINING
-n_epochs = 100000
+n_epochs = 15000
 losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
 
 print('done!')
@@ -208,7 +351,8 @@ print(f'Total acc: {correct / total:.4f}')
 
 print_test_case_direct(ds, model,
     # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
-    [3, 1, 2, 1, 2, 1, 2, 1, 2, 1, 3],
+    # [1, 5, 2, 1, 5, 5, 5, 2, 1, 5, 2, 1, 5, 5, 2, 1, 2, 5, 5, 1],
+    [1, 2, 1, 5, 5, 5, 2, 1, 2, 1, 5, 5, 2, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
     [3,3]
 )
 
@@ -219,7 +363,7 @@ print_test_case_direct(ds, model,
 
 
 # <codecell>
-model.save('save/hid5_50k_vargs3_rnn_flat_resv')
+model.save('save/hid100_15k_vargs3_rnn_classifier')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -249,8 +393,8 @@ test_seqs = [
     # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
-    [3, 0, 1, 0, 3],
-    [3, 0, 0, 0, 0, 1, 0, 2, 1, 3],
+    [0, 1, 2, 1, 5, 5, 5, 5, 5, 5],
+    [0, 1, 2, 1],
     # [3, 1, 2, 1, 2, 1, 2, 1, 3],
     # [3, 1, 1, 3]
     # [3, 0, 1, 2, 0, 1, 3],
@@ -291,6 +435,15 @@ plt.legend()
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
+ds = BinaryAdditionDataset(n_bits=2, 
+                           onehot_out=True, 
+                           max_args=3, 
+                           add_noop=True,
+                           max_noop=7,
+                           max_noop_only=True,
+                        #    max_only=True, 
+                           little_endian=False)
+
 all_points = []
 all_labs_true = []
 all_labs_pred = []
@@ -316,10 +469,47 @@ all_points = PCA(n_components=2).fit_transform(all_points.T).T
 plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
 plt.legend()
 # plt.savefig('save/fig/micro_128k_cell_cloud.png')
+# plt.savefig('save/fig/100_hid_cell_cloud.png')
+
+# %%
 
 # <codecell>
 plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_pred)
 plt.legend()
 
 # %%
+all_points = []
+all_labs_true = []
+all_labs_pred = []
 
+for seq, out in ds:
+    seq = torch.tensor(seq)
+    with torch.no_grad():
+        info = model.trace(seq)
+    
+    point = info['enc']['hidden'][-1].numpy()
+    all_points.append(point)
+
+    # lab_true = ds.tokens_to_args(out)
+    # lab_pred = ds.tokens_to_args(info['out'])
+    lab_true = [out]
+    lab_pred = [info['out']]
+    all_labs_true.append(lab_true[0])
+    all_labs_pred.append(lab_pred[0])
+
+all_points = np.concatenate(all_points, axis=-1)
+all_points = PCA(n_components=2).fit_transform(all_points.T).T
+
+for i in range(max(all_labs_true)+1):
+    idx = np.array(all_labs_true) == i
+    plt.scatter(all_points[0,:][idx], all_points[1,:][idx], label=str(i))
+
+plt.legend()
+# plt.savefig('save/fig/100_hid_cell_cloud.png')
+
+# <codecell>
+for i in range(max(all_labs_pred)+1):
+    idx = np.array(all_labs_pred) == i
+    plt.scatter(all_points[0,:][idx], all_points[1,:][idx], label=str(i))
+
+plt.legend()
