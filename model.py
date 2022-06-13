@@ -630,8 +630,7 @@ class RnnClassifier(Model):
     @torch.no_grad()
     def generate(self, input_seq):
         input_seq = input_seq.unsqueeze(0)
-        h = self.encode(input_seq)
-        logits = self.readout(h)
+        logits = self(input_seq)  # TODO: untested
         return torch.argmax(logits, dim=-1)
     
     def save(self, path):
@@ -673,8 +672,86 @@ class RnnClassifier(Model):
         return loss, tok_acc, tok_acc
 
 
+class RnnClassifierWithMLP(RnnClassifier):
+    def __init__(self, n_mlp_layers=2, activation='tanh', *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.n_mlp_layers = n_mlp_layers
+
+        self.activ = None
+        self.activ_name = activation
+        if activation == 'linear':
+            self.activ = nn.Identity()
+        elif activation == 'tanh':
+            self.activ = torch.tanh
+        elif activation == 'relu':
+            self.activ = torch.relu
+        else:
+            raise ValueError('unrecognized activation: ', activation)
+    
+        for i in range(n_mlp_layers):
+            setattr(self, f'mlp_l{i}', nn.Linear(self.hidden_size, self.hidden_size))
+        
+
+    def forward(self, input_seq):
+        enc_h = self.encode(input_seq)
+
+        for i in range(self.n_mlp_layers):
+            layer = getattr(self, f'mlp_l{i}')
+            enc_h = self.activ(layer(enc_h))
+
+        logits = self.readout(enc_h)
+        return logits
+
+
+    def save(self, path):
+        Model.save(self, path, {
+            'max_arg': self.max_arg,
+            'embedding_size': self.embedding_size,
+            'hidden_size': self.hidden_size,
+            'n_layers': self.n_layers,
+            'n_mlp_layers': self.n_mlp_layers,
+            'activation': self.activ_name
+        })
+
+    def trace(self, input_seq):
+        e = self.encoder_rnn
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'hidden': [],
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+
+            in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
+            hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
+            hidden = torch.tanh(in_act + hid_act)
+            info['enc']['hidden'].append(hidden)
+        
+        hidden = hidden.T
+        for i in range(self.n_mlp_layers):
+            layer = getattr(self, f'mlp_l{i}')
+            hidden = self.activ(layer(hidden))
+
+        logits = self.readout(hidden).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
+
+
 class ReservoirClassifier(RnnClassifier):
-    def __init__(self, max_arg, n_reservoir_layers=2, activation='linear', **kwargs) -> None:
+    def __init__(self, max_arg, n_reservoir_layers=2, activation='tanh', **kwargs) -> None:
         super().__init__(max_arg, **kwargs)
         self.n_reservoir_layers = n_reservoir_layers
 
@@ -702,7 +779,6 @@ class ReservoirClassifier(RnnClassifier):
         for i in range(self.n_reservoir_layers):
             layer = getattr(self, f'reservoir_l{i}')
             enc_h = self.activ(layer(enc_h))
-            enc_h = layer(enc_h)
 
         logits = self.readout(enc_h)
         return logits

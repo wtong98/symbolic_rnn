@@ -271,7 +271,6 @@ def print_test_case(ds, model, args):
     return result == np.sum(in_args)
 
 
-#TODO: performs much more poorly without 0 prefix pads, investigate further <-- STOPPED HERE
 @torch.no_grad()
 def print_test_case_direct(ds, model, in_toks, out_toks):
     in_args = ds.tokens_to_args(in_toks)
@@ -435,39 +434,46 @@ plt.legend()
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
-ds = BinaryAdditionDataset(n_bits=2, 
-                           onehot_out=True, 
-                           max_args=3, 
-                           add_noop=True,
-                           max_noop=7,
-                           max_noop_only=True,
-                        #    max_only=True, 
-                           little_endian=False)
 
-all_points = []
-all_labs_true = []
-all_labs_pred = []
+fig, axs = plt.subplots(1, 6, figsize=(18, 3))
 
-for seq, out in ds:
-    seq = torch.tensor(seq)
-    with torch.no_grad():
-        info = model.trace(seq)
-    
-    point = info['enc']['hidden'][-1].numpy()
-    all_points.append(point)
+for n, ax in zip(range(10), axs.ravel()):
+    ds = BinaryAdditionDataset(n_bits=2, 
+                            onehot_out=True, 
+                            max_args=3, 
+                            add_noop=True,
+                            max_noop=n,
+                            max_noop_only=True,
+                            #    max_only=True, 
+                            little_endian=False)
 
-    # lab_true = ds.tokens_to_args(out)
-    # lab_pred = ds.tokens_to_args(info['out'])
-    lab_true = [out]
-    lab_pred = [info['out']]
-    all_labs_true.append(lab_true[0])
-    all_labs_pred.append(lab_pred[0])
+    all_points = []
+    all_labs_true = []
+    all_labs_pred = []
 
-all_points = np.concatenate(all_points, axis=-1)
-all_points = PCA(n_components=2).fit_transform(all_points.T).T
+    for seq, out in ds:
+        seq = torch.tensor(seq)
+        with torch.no_grad():
+            info = model.trace(seq)
+        
+        point = info['enc']['hidden'][-1].numpy()
+        all_points.append(point)
 
-plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
-plt.legend()
+        # lab_true = ds.tokens_to_args(out)
+        # lab_pred = ds.tokens_to_args(info['out'])
+        lab_true = [out]
+        lab_pred = [info['out']]
+        all_labs_true.append(lab_true[0])
+        all_labs_pred.append(lab_pred[0])
+
+    all_points = np.concatenate(all_points, axis=-1)
+    all_points = PCA(n_components=2).fit_transform(all_points.T).T
+
+    ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
+    ax.set_title(f'n_noops = {n}')
+
+fig.tight_layout()
+plt.savefig('save/fig/rnn_noop_cloud.png')
 # plt.savefig('save/fig/micro_128k_cell_cloud.png')
 # plt.savefig('save/fig/100_hid_cell_cloud.png')
 

@@ -112,13 +112,13 @@ def make_cases():
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
                 n_epochs=n_epochs),
 
-        TestCase(name='Linear RNN (full dataset)',
-                model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
+        TestCase(name='RNN + MLP (full dataset)',
+                model=RnnClassifierWithMLP(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
                 n_epochs=n_epochs),
 
-        TestCase(name='Linear RNN (max args only)',
-                model=LinearRnnClassifier(max_value, hidden_size=arch_width*10), 
+        TestCase(name='RNN + MLP (max args only)',
+                model=RnnClassifierWithMLP(max_value, hidden_size=arch_width), 
                 ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
                 n_epochs=n_epochs),
     ]
