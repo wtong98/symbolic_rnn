@@ -157,7 +157,7 @@ class BinaryAdditionDataset(Dataset):
         return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
-ds = BinaryAdditionDataset(n_bits=2, 
+ds = BinaryAdditionDataset(n_bits=3, 
                            onehot_out=True, 
                            max_args=3, 
                            add_noop=True,
@@ -185,14 +185,16 @@ test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_work
 
 # <codecell>
 model = RnnClassifier(
-    max_arg=9,
+    max_arg=21,
     embedding_size=5,
     hidden_size=100,
     vocab_size=6).cuda()
 
+model.load('save/hid100k_vargs3_nbits3')
+
 # <codecell>
 ### TRAINING
-n_epochs = 15000
+n_epochs = 30000
 losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
 
 print('done!')
@@ -362,7 +364,8 @@ print_test_case_direct(ds, model,
 
 
 # <codecell>
-model.save('save/hid100_15k_vargs3_rnn_classifier')
+# TODO: save vocab_size also
+model.save('save/hid100k_vargs3_nbits3')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -392,8 +395,8 @@ test_seqs = [
     # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
-    [0, 1, 2, 1, 5, 5, 5, 5, 5, 5],
-    [0, 1, 2, 1],
+    [0,0,0,0,1,0,2,1,5,5,5],
+    [1,1,5,5,5],
     # [3, 1, 2, 1, 2, 1, 2, 1, 3],
     # [3, 1, 1, 3]
     # [3, 0, 1, 2, 0, 1, 3],
@@ -423,10 +426,12 @@ pca.fit_transform(trajs_blob.T)
 plt.gcf().set_size_inches(12, 12)
 for seq, traj in zip(all_seqs, all_trajs):
     traj = pca.transform(traj.T).T
+    traj = np.concatenate((np.zeros((2, 1)), traj), axis=-1)
     jit_x = np.random.uniform() * 0.04
     jit_y = np.random.uniform() * 0.04
     plt.plot(traj[0,:] + jit_x, traj[1,:] + jit_y, 'o-', label=str(seq), alpha=0.8)
 
+plt.annotate('enc start', (traj[0,0], traj[1,0]))
 plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
 
@@ -436,9 +441,11 @@ plt.legend()
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
 
 fig, axs = plt.subplots(1, 6, figsize=(18, 3))
+mpb = None
 
+# TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
-    ds = BinaryAdditionDataset(n_bits=2, 
+    ds = BinaryAdditionDataset(n_bits=3, 
                             onehot_out=True, 
                             max_args=3, 
                             add_noop=True,
@@ -469,13 +476,13 @@ for n, ax in zip(range(10), axs.ravel()):
     all_points = np.concatenate(all_points, axis=-1)
     all_points = PCA(n_components=2).fit_transform(all_points.T).T
 
-    ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
+    mpb = ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
     ax.set_title(f'n_noops = {n}')
 
+# TODO: what does it look like in 3D?
+fig.colorbar(mpb)
 fig.tight_layout()
 plt.savefig('save/fig/rnn_noop_cloud.png')
-# plt.savefig('save/fig/micro_128k_cell_cloud.png')
-# plt.savefig('save/fig/100_hid_cell_cloud.png')
 
 # %%
 

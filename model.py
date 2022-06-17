@@ -178,7 +178,7 @@ class Model(nn.Module):
         with (path / 'params.json').open('w') as fp:
             json.dump(params, fp)
     
-    def load(self):
+    def load(self, path):
         if type(path) == str:
             path = Path(path)
 
