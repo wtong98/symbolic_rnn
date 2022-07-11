@@ -633,6 +633,14 @@ class RnnClassifier(Model):
         logits = self(input_seq)  # TODO: untested
         return torch.argmax(logits, dim=-1)
     
+    @torch.no_grad()
+    def get_embedding(self, token_idxs):
+        embs = self.embedding(torch.tensor(token_idxs))
+        embs = self.encoder_rnn.weight_ih_l0 @ embs.T \
+            + self.encoder_rnn.bias_ih_l0.unsqueeze(1) \
+            + self.encoder_rnn.bias_hh_l0.unsqueeze(1)
+        return embs
+    
     def save(self, path):
         super().save(path, {
             'max_arg': self.max_arg,

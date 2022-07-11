@@ -526,3 +526,24 @@ for i in range(max(all_labs_pred)+1):
     plt.scatter(all_points[0,:][idx], all_points[1,:][idx], label=str(i))
 
 plt.legend()
+
+# <codecell>
+# INVESTIGATE GEOMETRY
+
+# TODO: perhaps not super close to 0?
+embs = model.embedding(torch.tensor([ds.noop_idx]))
+# embs = model.embedding(torch.tensor([4]))
+embs = model.encoder_rnn.weight_ih_l0 @ embs.T + model.encoder_rnn.bias_ih_l0.unsqueeze(1) + model.encoder_rnn.bias_hh_l0.unsqueeze(1)
+embs = embs.flatten().detach().numpy()
+
+sort_idxs = np.argsort(np.abs(embs))
+plot_idxs = np.arange(20)
+
+embs = model.embedding(torch.tensor([ds.plus_idx]))
+# embs = model.embedding(torch.tensor([4]))
+embs = model.encoder_rnn.weight_ih_l0 @ embs.T + model.encoder_rnn.bias_ih_l0.unsqueeze(1) + model.encoder_rnn.bias_hh_l0.unsqueeze(1)
+embs = embs.flatten().detach().numpy()
+plt.bar(plot_idxs, embs[sort_idxs][plot_idxs])
+# model.encoder_rnn.weight_hh_l0 @ embs
+
+# %%
