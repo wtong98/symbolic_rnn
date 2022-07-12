@@ -63,11 +63,14 @@ print(out)
 
 
 
-
 # <codecell>  REP CLOUD WITH BACKGROUND COLOR
 fig, axs = plt.subplots(1, 6, figsize=(18, 3))
 # fig, axs = plt.subplots(1, 2, figsize=(8, 3))
 mpb = None
+
+W = model.encoder_rnn.weight_hh_l0.data.numpy()
+pca = PCA(n_components=2)
+pca.fit_transform(np.linalg.matrix_power(W, 1))
 
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
@@ -100,19 +103,20 @@ for n, ax in zip(range(10), axs.ravel()):
         all_labs_pred.append(lab_pred[0])
 
     all_points = np.concatenate(all_points, axis=-1)
-    pca = PCA(n_components=2)
-    all_points = pca.fit_transform(all_points.T).T
+    # pca = PCA(n_components=2)
+    # all_points = pca.fit_transform(all_points.T).T
+    all_points = pca.transform(all_points.T).T
 
-    x = np.linspace(-10, 10, 100)
-    xx, yy = np.meshgrid(x, x)
-    bg = np.stack((xx.flatten(), yy.flatten()), axis=1)
-    with torch.no_grad():
-        # some info lost with inverse transform
-        hid_bg = torch.tensor(pca.inverse_transform(bg)).float()
-        out_labs = model.readout(hid_bg).argmax(dim=-1)
-        zz = out_labs.numpy().reshape(xx.shape)
+    # x = np.linspace(-10, 10, 100)
+    # xx, yy = np.meshgrid(x, x)
+    # bg = np.stack((xx.flatten(), yy.flatten()), axis=1)
+    # with torch.no_grad():
+    #     # some info lost with inverse transform
+    #     hid_bg = torch.tensor(pca.inverse_transform(bg)).float()
+    #     out_labs = model.readout(hid_bg).argmax(dim=-1)
+    #     zz = out_labs.numpy().reshape(xx.shape)
 
-    ax.contourf(xx, yy, zz, alpha=0.5)
+    # ax.contourf(xx, yy, zz, alpha=0.5)
     mpb = ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_pred)
 
     ax.set_title(f'n_noops = {n}')
@@ -120,5 +124,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('../save/fig/rnn_noop_cloud_with_background.png')
+plt.savefig('../save/fig/rnn_noop_cloud.png')
 
+
+# %%
