@@ -163,7 +163,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            add_noop=True,
                            max_noop=5,
                         #    max_noop_only=True,
-                        #    max_only=True, 
+                           max_only=True, 
                            little_endian=False)
 
 it = iter(ds)
@@ -190,7 +190,7 @@ model = RnnClassifier(
     hidden_size=100,
     vocab_size=6).cuda()
 
-model.load('save/hid100k_vargs3_nbits3')
+# model.load('save/hid100k_vargs3_nbits3')
 
 # <codecell>
 ### TRAINING
@@ -365,7 +365,7 @@ print_test_case_direct(ds, model,
 
 # <codecell>
 # TODO: save vocab_size also
-model.save('save/hid100k_vargs3_nbits3')
+model.save('save/hid100k_vargs3_nbits3_max_args')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -443,6 +443,10 @@ plt.legend()
 fig, axs = plt.subplots(1, 6, figsize=(18, 3))
 mpb = None
 
+W = model.encoder_rnn.weight_hh_l0.data.numpy()
+pca = PCA(n_components=2)
+pca.fit(W)
+
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
     ds = BinaryAdditionDataset(n_bits=3, 
@@ -474,7 +478,8 @@ for n, ax in zip(range(10), axs.ravel()):
         all_labs_pred.append(lab_pred[0])
 
     all_points = np.concatenate(all_points, axis=-1)
-    all_points = PCA(n_components=2).fit_transform(all_points.T).T
+    # all_points = PCA(n_components=2).fit_transform(all_points.T).T
+    all_points = pca.transform(all_points.T).T
 
     mpb = ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
     ax.set_title(f'n_noops = {n}')
@@ -482,7 +487,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/rnn_noop_cloud.png')
+plt.savefig('save/fig/rnn_noop_cloud_max_args.png')
 
 # %%
 

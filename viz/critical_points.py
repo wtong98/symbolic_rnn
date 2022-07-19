@@ -24,7 +24,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            little_endian=False)
 
 model = RnnClassifier(max_arg=6)
-model.load('../save/hid100k_vargs3_nbits3')
+model.load('../save/hid100k_vargs3_nbits3_max_args')
 
 
 # <codecell>
@@ -104,7 +104,7 @@ for seq in all_seqs:
 
 plt.gcf().set_size_inches(12, 12)
 lss = [':', '-']
-for seq, traj, result, ls in zip(all_seqs, all_trajs, all_results, lss):
+for seq, traj, result, ls in zip(all_seqs[:1], all_trajs, all_results, lss):
     # traj = pca.transform(traj.T).T
     traj = np.concatenate((np.zeros((2, 1)), traj), axis=-1)
     jit_x = np.random.uniform(-1, 1) * 0.05
@@ -154,6 +154,6 @@ handles = [
 ]
 
 plt.legend(handles=handles)
-plt.savefig('../save/fig/rnn_noop_cloud_with_crit_2_trajs.png')
+plt.savefig('../save/fig/rnn_noop_cloud_with_crit_trajs_max_args.png')
 
 # %%

@@ -1,3 +1,5 @@
 venv_symbolic/
 save/
 __pycache__/
+*.png
+*.npy
