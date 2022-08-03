@@ -25,6 +25,8 @@ class BinaryAdditionDataset(Dataset):
         """
         filter = {
             'max_value': max value representable by expression
+            'in_args': skip any expression with these input args
+            'out_args': skip any expression with these output args
         }
         """
         super().__init__()
@@ -35,7 +37,15 @@ class BinaryAdditionDataset(Dataset):
         self.max_noop = max_noop
         self.max_noop_only = max_noop_only
         self.little_endian = little_endian
-        self.filter = filter_ or {}
+
+        self.filter = {
+            'max_value': np.inf,
+            'in_args': [],
+            'out_args': []
+        }
+
+        for k, v in (filter_ or {}).items():
+            self.filter[k] = v
 
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
@@ -74,8 +84,20 @@ class BinaryAdditionDataset(Dataset):
             in_toks_tmp = functools.reduce(lambda a, b: a + noops + (plus_idx,) + b, term)
             # in_toks = (end_idx,) + in_toks + (end_idx,)  # END_IDX forcibly removed
 
-            out_val = np.sum(self.tokens_to_args(in_toks_tmp))
-            if 'max_value' in self.filter and self.filter['max_value'] < out_val:
+            in_args = self.tokens_to_args(in_toks_tmp)
+            do_skip = False
+            for arg in self.filter['in_args']:
+                if arg in in_args:
+                    do_skip = True
+                    break
+            
+            if do_skip:
+                continue
+                    
+            out_val = np.sum(in_args)
+            if self.filter['max_value'] < out_val:
+                continue
+            if out_val in self.filter['out_args']:
                 continue
             if not self.onehot_out:
                 out_val = self.args_to_tokens(out_val, args_only=True)
@@ -149,8 +171,9 @@ class BinaryAdditionDataset(Dataset):
             else:
                 x = functools.reduce(lambda a, b: a + np.random.randint(self.max_noop+1) * (self.noop_idx,) + (self.plus_idx,) + b, x) \
                     + np.random.randint(self.max_noop+1) * (self.noop_idx,)
+        else:
+            x = functools.reduce(lambda a, b: a + (self.plus_idx,) + b, x)
 
-        # TODO: put it back together even if noops not requested
         return torch.tensor(x), torch.tensor(y)
     
     def __len__(self):
@@ -160,11 +183,14 @@ class BinaryAdditionDataset(Dataset):
 ds = BinaryAdditionDataset(n_bits=3, 
                            onehot_out=True, 
                            max_args=3, 
-                           add_noop=True,
+                           add_noop=False,
                            max_noop=5,
                         #    max_noop_only=True,
-                           max_only=True, 
-                           little_endian=False)
+                        #    max_only=True, 
+                           little_endian=False,
+                           filter_={
+                               'in_args': [2]
+                           })
 
 it = iter(ds)
 
@@ -194,7 +220,7 @@ model = RnnClassifier(
 
 # <codecell>
 ### TRAINING
-n_epochs = 30000
+n_epochs = 20000
 losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
 
 print('done!')
@@ -365,8 +391,9 @@ print_test_case_direct(ds, model,
 
 # <codecell>
 # TODO: save vocab_size also
-model.save('save/hid100k_vargs3_nbits3_max_args')
+model.save('save/skip_2')
 
+'''
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
 all_seqs = []
@@ -552,3 +579,4 @@ plt.bar(plot_idxs, embs[sort_idxs][plot_idxs])
 # model.encoder_rnn.weight_hh_l0 @ embs
 
 # %%
+'''

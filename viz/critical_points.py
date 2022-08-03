@@ -24,7 +24,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            little_endian=False)
 
 model = RnnClassifier(max_arg=6)
-model.load('../save/hid100k_vargs3_nbits3_max_args')
+model.load('../save/hid100k_vargs3_nbits3_linear')
 
 
 # <codecell>
