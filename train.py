@@ -183,13 +183,13 @@ class BinaryAdditionDataset(Dataset):
 ds = BinaryAdditionDataset(n_bits=3, 
                            onehot_out=True, 
                            max_args=3, 
-                           add_noop=False,
+                           add_noop=True,
                            max_noop=5,
                         #    max_noop_only=True,
                         #    max_only=True, 
                            little_endian=False,
                            filter_={
-                               'in_args': [2]
+                               'in_args': []
                            })
 
 it = iter(ds)
@@ -214,9 +214,9 @@ model = RnnClassifier(
     max_arg=21,
     embedding_size=5,
     hidden_size=100,
-    vocab_size=6).cuda()
+    vocab_size=6)
 
-# model.load('save/hid100k_vargs3_nbits3')
+model.load('save/skip_6')
 
 # <codecell>
 ### TRAINING
@@ -252,7 +252,7 @@ make_plots(losses)
 
 # <codecell>
 ### SIMPLE EVALUATION
-model.cuda()
+# model.cuda()
 
 @torch.no_grad()
 def print_test_case(ds, model, args):
@@ -305,9 +305,9 @@ def print_test_case_direct(ds, model, in_toks, out_toks):
 
     seq = in_toks
     if type(seq) != torch.Tensor:
-        seq = torch.tensor(in_toks, device='cuda')
+        seq = torch.tensor(in_toks)
 
-    pred_seq = model.generate(seq.cuda())
+    pred_seq = model.generate(seq)
     # result = ds.tokens_to_args(pred_seq)
     result = pred_seq
     result = result[0] if result != None else None
@@ -376,24 +376,23 @@ print(f'Total acc: {correct / total:.4f}')
 
 # print_test_case(ds, model, (1,2,2))
 
-print_test_case_direct(ds, model,
-    # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
-    # [1, 5, 2, 1, 5, 5, 5, 2, 1, 5, 2, 1, 5, 5, 2, 1, 2, 5, 5, 1],
-    [1, 2, 1, 5, 5, 5, 2, 1, 2, 1, 5, 5, 2, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
-    [3,3]
-)
-
 # print_test_case_direct(ds, model,
-#     [3, 1, 0, 2, 0, 0, 0, 0, 1, 3],
+#     # [3, 1, 2, 0, 1, 2, 1, 0, 2, 1, 2, 1, 2, 1, 0, 3],
+#     # [1, 5, 2, 1, 5, 5, 5, 2, 1, 5, 2, 1, 5, 5, 2, 1, 2, 5, 5, 1],
+#     [1, 2, 1, 5, 5, 5, 2, 1, 2, 1, 5, 5, 2, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
 #     [3,3]
 # )
+
+print_test_case_direct(ds, model,
+    [1, 0, 0, 0, 5, 5, 5, 2, 1, 1, 5, 5, 5],
+    [3,3]
+)
 
 
 # <codecell>
 # TODO: save vocab_size also
 model.save('save/skip_2')
 
-'''
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
 all_seqs = []
@@ -514,7 +513,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/rnn_noop_cloud_max_args.png')
+plt.savefig('save/fig/rnn_noop_cloud_skip_6_inarg.png')
 
 # %%
 
@@ -579,4 +578,3 @@ plt.bar(plot_idxs, embs[sort_idxs][plot_idxs])
 # model.encoder_rnn.weight_hh_l0 @ embs
 
 # %%
-'''

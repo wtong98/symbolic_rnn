@@ -24,7 +24,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            little_endian=False)
 
 model = RnnClassifier(max_arg=6)
-model.load('../save/hid100k_vargs3_nbits3_linear')
+model.load('../save/hid100k_vargs3_nbits3')
 
 
 # <codecell>
@@ -73,8 +73,10 @@ def optim(model, seq, h_init_idx, tok_idx):
 
 # <codecell>
 all_seqs = [
-    [1, 5, 5, 5] + 20 * [2, 1, 5, 5, 5],
-    [1, 0, 5, 5, 5] + 9 * [2, 1, 0, 5, 5, 5]
+    # [1, 5, 5, 5] + 20 * [2, 1, 5, 5, 5],
+    # [1, 0, 5, 5, 5] + 9 * [2, 1, 0, 5, 5, 5]
+    [1, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5],
+    [1, 0, 0, 5, 5, 5] + [2, 1, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5]
 ]
 
 all_results = []
@@ -103,8 +105,8 @@ for seq in all_seqs:
     all_trajs.append(traj)
 
 plt.gcf().set_size_inches(12, 12)
-lss = [':', '-']
-for seq, traj, result, ls in zip(all_seqs[:1], all_trajs, all_results, lss):
+lss = ['-', ':']
+for seq, traj, result, ls in zip(all_seqs, all_trajs, all_results, lss):
     # traj = pca.transform(traj.T).T
     traj = np.concatenate((np.zeros((2, 1)), traj), axis=-1)
     jit_x = np.random.uniform(-1, 1) * 0.05
@@ -154,6 +156,5 @@ handles = [
 ]
 
 plt.legend(handles=handles)
-plt.savefig('../save/fig/rnn_noop_cloud_with_crit_trajs_max_args.png')
-
+plt.savefig('../save/fig/rnn_noop_cloud_with_crit_full_comp.png')
 # %%

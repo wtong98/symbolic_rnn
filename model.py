@@ -178,7 +178,7 @@ class Model(nn.Module):
         with (path / 'params.json').open('w') as fp:
             json.dump(params, fp)
     
-    def load(self, path):
+    def load(self, path, device='cpu'):
         if type(path) == str:
             path = Path(path)
 
@@ -186,7 +186,7 @@ class Model(nn.Module):
             params = json.load(fp)
         
         self.__init__(**params)
-        weights = torch.load(path / 'weights.pt')
+        weights = torch.load(path / 'weights.pt', device)
         self.load_state_dict(weights)
         self.eval()
     
