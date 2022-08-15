@@ -210,17 +210,17 @@ train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_c
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
-model = RnnClassifier(
+model = LstmClassifier(
     max_arg=21,
     embedding_size=5,
     hidden_size=100,
-    vocab_size=6)
+    vocab_size=6).cuda()
 
-model.load('save/skip_6')
+model.load('save/lstm_nbits_3')
 
 # <codecell>
 ### TRAINING
-n_epochs = 20000
+n_epochs = 15000
 losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
 
 print('done!')
@@ -252,7 +252,7 @@ make_plots(losses)
 
 # <codecell>
 ### SIMPLE EVALUATION
-# model.cuda()
+model.cpu()
 
 @torch.no_grad()
 def print_test_case(ds, model, args):
@@ -384,14 +384,14 @@ print(f'Total acc: {correct / total:.4f}')
 # )
 
 print_test_case_direct(ds, model,
-    [1, 0, 0, 0, 5, 5, 5, 2, 1, 1, 5, 5, 5],
+    [1, 0, 0, 5, 5, 5, 2, 1, 5, 5, 5],
     [3,3]
 )
 
 
 # <codecell>
 # TODO: save vocab_size also
-model.save('save/skip_2')
+model.save('save/lstm_nbits_3')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -475,7 +475,7 @@ pca.fit(W)
 
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
-    ds = BinaryAdditionDataset(n_bits=3, 
+    ds = BinaryAdditionDataset(n_bits=4, 
                             onehot_out=True, 
                             max_args=3, 
                             add_noop=True,
@@ -513,7 +513,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/rnn_noop_cloud_skip_6_inarg.png')
+plt.savefig('save/fig/lstm_cloud_nbits_4_trained_3.png')
 
 # %%
 

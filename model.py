@@ -589,6 +589,9 @@ class RnnClassifier(Model):
         input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
         _, enc_h = self.encoder_rnn(input_packed)
 
+        if type(enc_h) == tuple:
+            enc_h = enc_h[0]
+
         return enc_h[-1,...]   # last hidden layer
     
     def forward(self, input_seq):
@@ -873,7 +876,99 @@ class LinearRnnClassifier(RnnClassifier):
         )
     
     def trace(self, input_seq):
-        raise NotImplementedError
+        e = self.encoder_rnn
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'hidden': [],
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+
+            in_act = e.ih.weight @ x + e.ih.bias.data.unsqueeze(1)
+            hid_act = e.hh.weight @ hidden + e.hh.bias.data.unsqueeze(1)
+            hidden = torch.tanh(in_act + hid_act)
+            info['enc']['hidden'].append(hidden)
+        
+        logits = self.readout(hidden.T).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
+
+
+class LstmClassifier(RnnClassifier):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.encoder_rnn = nn.LSTM(
+            input_size=self.embedding_size,
+            hidden_size=self.hidden_size,
+            num_layers=self.n_layers,
+            batch_first=True,
+        )
+
+    def trace(self, input_seq):
+        e = self.encoder_rnn
+        sig = torch.sigmoid
+        tanh = torch.tanh
+        input_seq = torch.tensor(input_seq)
+
+        input_emb = self.embedding(input_seq)
+        hidden = torch.zeros((self.hidden_size, 1))
+        cell = torch.zeros((self.hidden_size, 1))
+
+        info = {
+            'enc': {
+                'cell': [],
+                'hidden': [],
+                'f': [],
+                'i': [],
+                'o': [],
+                'g':[]
+            },
+
+            'input_emb': input_emb,
+            'logits': None,
+            'out': None
+        }
+
+        # encode
+        for x in input_emb:
+            x = x.reshape(-1, 1)
+            in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
+            hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
+            act = in_act + hid_act
+
+            i_gate = sig(act[:self.hidden_size])
+            f_gate = sig(act[self.hidden_size:2*self.hidden_size])
+            g_writ = tanh(act[2*self.hidden_size:3*self.hidden_size])
+            o_gate = sig(act[3*self.hidden_size:])
+
+            cell = f_gate * cell + i_gate * g_writ
+            hidden = o_gate * tanh(cell)
+
+            info['enc']['cell'].append(cell)
+            info['enc']['hidden'].append(hidden)
+            info['enc']['f'].append(f_gate)
+            info['enc']['i'].append(i_gate)
+            info['enc']['g'].append(g_writ)
+            info['enc']['o'].append(o_gate)
+        
+        logits = self.readout(hidden.T).squeeze()
+        info['logits'] = logits
+        info['out'] = torch.argmax(logits)
+        return info
 
 '''
 # %%

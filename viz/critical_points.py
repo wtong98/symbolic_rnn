@@ -24,7 +24,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            little_endian=False)
 
 model = RnnClassifier(max_arg=6)
-model.load('../save/hid100k_vargs3_nbits3')
+model.load('../save/nbits_4')
 
 
 # <codecell>
@@ -73,23 +73,25 @@ def optim(model, seq, h_init_idx, tok_idx):
 
 # <codecell>
 all_seqs = [
-    # [1, 5, 5, 5] + 20 * [2, 1, 5, 5, 5],
+    # [1, 5, 5, 5] + 44 * [2, 1, 5, 5, 5],
     # [1, 0, 5, 5, 5] + 9 * [2, 1, 0, 5, 5, 5]
-    [1, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5],
-    [1, 0, 0, 5, 5, 5] + [2, 1, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5]
+    [1, 0, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5],
+    [1, 0, 0, 0, 5, 5, 5] + [2, 1, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5]
 ]
 
-all_results = []
-for seq in all_seqs:
-    curr_results = []
-    print('Compute seq:', seq)
-    for i in tqdm(range(len(seq))):
-        res = optim(model, seq, i, 5)
-        curr_results.append(res)
-    all_results.append(curr_results)
+# all_results = []
+# for seq in all_seqs:
+#     curr_results = []
+#     print('Compute seq:', seq)
+#     for i in tqdm(range(len(seq))):
+#         res = optim(model, seq, i, 5)
+#         curr_results.append(res)
+#     all_results.append(curr_results)
 
 # <codecell>
 all_trajs = []
+all_labs = []
+all_results = [[], []]  # TODO: temporary
 
 W = model.encoder_rnn.weight_hh_l0.data.numpy()
 pca = PCA(n_components=2)
@@ -100,13 +102,17 @@ for seq in all_seqs:
     with torch.no_grad():
         info = model.trace(seq)
 
-    traj = torch.cat(info['enc']['hidden'], axis=1).numpy()
+    traj = torch.cat(info['enc']['hidden'], axis=-1)
+    labs = model.readout(traj.T).argmax(axis=-1)
+    all_labs.append(labs.tolist())
+
+    traj = traj.numpy()
     traj = pca.transform(traj.T).T
     all_trajs.append(traj)
 
 plt.gcf().set_size_inches(12, 12)
 lss = ['-', ':']
-for seq, traj, result, ls in zip(all_seqs, all_trajs, all_results, lss):
+for seq, traj, labs, result, ls in zip(all_seqs, all_trajs, all_labs, all_results, lss):
     # traj = pca.transform(traj.T).T
     traj = np.concatenate((np.zeros((2, 1)), traj), axis=-1)
     jit_x = np.random.uniform(-1, 1) * 0.05
@@ -115,7 +121,7 @@ for seq, traj, result, ls in zip(all_seqs, all_trajs, all_results, lss):
     # jit_y = 1
 
     diffs = traj[:,1:] - traj[:,:-1]
-    for i, point, diff in zip(range(len(seq)), traj.T, diffs.T):
+    for i, point, lab, diff in zip(range(len(seq)), traj.T, labs, diffs.T):
         if seq[i] == 5:
             color = 'C0'
         elif seq[i] == 1:
@@ -128,6 +134,7 @@ for seq, traj, result, ls in zip(all_seqs, all_trajs, all_results, lss):
         point[0] += jit_x
         point[1] += jit_y
         plt.arrow(*point, *diff, color=color, linestyle=ls, linewidth=2, alpha=0.85)
+        plt.annotate(lab, point + 0.1)
     
     # plt.plot(traj[0,:] + jit_x, traj[1,:] + jit_y, 'o-', label=str(seq), alpha=0.8)
 
@@ -156,5 +163,5 @@ handles = [
 ]
 
 plt.legend(handles=handles)
-plt.savefig('../save/fig/rnn_noop_cloud_with_crit_full_comp.png')
+plt.savefig('../save/fig/rnn_noop_cloud_with_crit_nbit_4_comp.png')
 # %%
