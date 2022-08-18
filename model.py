@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 from torch.optim import Adam
@@ -970,6 +971,118 @@ class LstmClassifier(RnnClassifier):
         info['out'] = torch.argmax(logits)
         return info
 
+class Ntm(nn.Module):
+    def __init__(self, ctrl_size=32, n_read_heads=1, n_write_heads=1, mem_size=64, word_size=32) -> None:
+        super().__init__()
+        
+        self.controller = None
+        self.memory = None
+    
+    def forward(self, input_pack):
+        dev = next(self.parameters()).device
+
+        data, batch_sizes, _, unsort_idxs = input_pack
+        batch_idxs = batch_sizes.cumsum(0)
+        batches = torch.tensor_split(data, batch_idxs[:-1])
+
+        # TODO: add memory component
+        ctrl_state = torch.zeros(batch_sizes[0], self.ctrl_size).to(dev)
+        read = torch.zeros(batch_sizes[0], self.word_size).to(dev)
+        for b, size in zip(batches, batch_sizes):
+            ctrl_in = torch.cat((b, read[:size,]), dim=1)
+            ctrl_out = self.controller(ctrl_in, ctrl_state[:size,])
+            read_out = self.memory(ctrl_out)
+
+            ctrl_state = torch.cat((ctrl_out, ctrl_state[size:,]), dim=0)
+            read = torch.cat((read_out, read[size:,]), dim=0)
+        
+        return ctrl_state[unsort_idxs], read[unsort_idxs]
+
+
+class NtmLstmController(nn.Moduel):
+    def __init__(self, embedding_size=5, ctrl_size=32) -> None:
+        super().__init__()
+
+        self.ctrl_size = ctrl_size
+        self.embedding_size = embedding_size
+
+        self.model = nn.LSTM(
+            input_size=self.embedding_size,
+            hidden_size=self.ctrl_size,
+            num_layers=1,   #TODO: consider multiple layers?
+            batch_first=True,
+        )
+        
+    
+    # TODO: make the state passes work (may need additional mods)
+    def forward(self, ctrl_in, ctrl_state):
+        _, ctrl_out = self.model(ctrl_in, ctrl_state)  #TODO: prob concat hid and cell?
+        return ctrl_out
+
+
+class NtmMemory(nn.Module):
+    def __init__(self, ctrl_size=32, n_read_heads=1, n_write_heads=1, mem_size=64, word_size=32) -> None:
+        super().__init__()
+
+        self.ctrl_size = ctrl_size
+        self.n_read_heads = n_read_heads
+        self.n_write_heads = n_write_heads
+        self.mem_size = mem_size
+        self.word_size = word_size
+
+        self.fc_read = nn.Linear(ctrl_size, self.word_size + 6)   # key and address
+        self.fc_write = nn.Linear(ctrl_size, 3 * self.word_size + 6)   # key, erase, add, and address
+    
+    def forward(self, mem, ctrl_out, prev_w_write, prev_w_read):
+        write_info = self.fc_write(ctrl_out)
+        mem = self.write(mem, write_info, prev_w_write)
+
+        read_info = self.fc_read(ctrl_out)
+        read_out = self.read(mem, read_info, prev_w_read)
+        return mem, read_out
+    
+    def write(self, mem, write_info, prev_w):
+        key, erase, add, beta, g, s, gamma = torch.split(write_info, 3 * [self.word_size] + [1, 1, 3, 1], dim=1)
+        w = self.address(mem, key, beta, g, s, gamma, prev_w)
+        mem = mem * (1 - w.unsqueeze(-1) @ erase.unsqueeze(1)) + w.unsqueeze(-1) @ add.unsqueeze(1)
+        return mem
+
+    def read(self, mem, read_info, prev_w):
+        key, beta, g, s, gamma = torch.split(read_info, [self.word_size, 1, 1, 3, 1], dim=1)
+        w = self.address(mem, key, beta, g, s, gamma, prev_w)
+        return (w.unsqueeze(1) @ mem).squeeze(1)
+    
+    def address(self, mem, key, beta, g, s, gamma, prev_w):
+        # attention (content-based addressing)
+        # TODO: try scaled dot-product attention
+        key = torch.tanh(key)
+        beta = torch.relu(beta)
+        w = torch.softmax(beta * F.cosine_similarity(mem, key.unsqueeze(1), dim=-1), dim=1)
+
+        # interpolate
+        g = torch.sigmoid(g)
+        w = g * w + (1 - g) * prev_w
+
+        # shift
+        s = F.softmax(s, dim=1)
+        w = torch.stack([self._conv(w[b], s[b]) for b in range(w.shape[0])])
+
+        # sharpen
+        gamma = 1 + torch.relu(gamma)
+        w = w ** gamma / torch.sum(w ** gamma)
+        return w
+    
+    def _conv(self, w, s):
+        pass # TODO: implement < -- STOPPED HERE
+
+        
+
+
+    
+    
+    
+
+            
 '''
 # %%
 model = BinaryAdditionFlatRNN(0)

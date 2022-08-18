@@ -210,13 +210,13 @@ train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_c
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
-model = LstmClassifier(
+model = LinearRnnClassifier(
     max_arg=21,
     embedding_size=5,
     hidden_size=100,
     vocab_size=6).cuda()
 
-model.load('save/lstm_nbits_3')
+model.load('save/hid100k_vargs3_nbits3_linear')
 
 # <codecell>
 ### TRAINING
@@ -470,12 +470,13 @@ fig, axs = plt.subplots(1, 6, figsize=(18, 3))
 mpb = None
 
 W = model.encoder_rnn.weight_hh_l0.data.numpy()
+# W = model.encoder_rnn.hh.weight.detach().numpy()
 pca = PCA(n_components=2)
 pca.fit(W)
 
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
-    ds = BinaryAdditionDataset(n_bits=4, 
+    ds = BinaryAdditionDataset(n_bits=3, 
                             onehot_out=True, 
                             max_args=3, 
                             add_noop=True,
@@ -513,7 +514,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/lstm_cloud_nbits_4_trained_3.png')
+plt.savefig('save/fig/linear_cloud.png')
 
 # %%
 
