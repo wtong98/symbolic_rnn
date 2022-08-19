@@ -971,12 +971,49 @@ class LstmClassifier(RnnClassifier):
         info['out'] = torch.argmax(logits)
         return info
 
+
+class NtmClassifier(RnnClassifier):
+    def __init__(self, max_arg, embedding_size=5, ctrl_size=100, mem_size=100, word_size=8, **kwargs) -> None:
+        super().__init__(max_arg, embedding_size, hidden_size=ctrl_size, **kwargs)
+
+        self.ctrl_size = ctrl_size
+        self.mem_size = mem_size
+        self.word_size = word_size
+
+        self.encoder_rnn = None
+        self.ntm = Ntm(ctrl_size=ctrl_size, mem_size=mem_size, word_size=word_size)
+        self.readout = nn.Linear(ctrl_size + word_size, self.max_arg + 1)
+    
+    def encode(self, input_seq):
+        input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
+        input_emb = self.embedding(input_seq)
+        input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
+        state = self.ntm(input_packed)
+
+        return torch.cat((state['ctrl_hid'], state['read']))
+    
+    def trace(self, input_seq):
+        raise NotImplementedError
+    
+    def get_embedding(self, token_idxs):
+        raise NotImplementedError
+    
+    def save(self, path):
+        Model.save(self, path, {
+            'max_arg': self.max_arg,
+            'embedding_size': self.embedding_size,
+            'ctrl_size': self.ctrl_size,
+            'mem_size': self.mem_size,
+            'word_size': self.word_size,
+        })
+
+
 class Ntm(nn.Module):
     def __init__(self, ctrl_size=32, n_read_heads=1, n_write_heads=1, mem_size=64, word_size=32) -> None:
         super().__init__()
         
-        self.controller = None
-        self.memory = None
+        self.controller = NtmLstmController(ctrl_size=ctrl_size, word_size=word_size)
+        self.memory = NtmMemory(ctrl_size=ctrl_size, n_read_heads=n_read_heads, n_write_heads=n_write_heads, mem_size=mem_size)
     
     def forward(self, input_pack):
         dev = next(self.parameters()).device
@@ -985,26 +1022,38 @@ class Ntm(nn.Module):
         batch_idxs = batch_sizes.cumsum(0)
         batches = torch.tensor_split(data, batch_idxs[:-1])
 
-        # TODO: add memory component
-        ctrl_state = torch.zeros(batch_sizes[0], self.ctrl_size).to(dev)
-        read = torch.zeros(batch_sizes[0], self.word_size).to(dev)
-        for b, size in zip(batches, batch_sizes):
-            ctrl_in = torch.cat((b, read[:size,]), dim=1)
-            ctrl_out = self.controller(ctrl_in, ctrl_state[:size,])
-            read_out = self.memory(ctrl_out)
+        ctrl_state = self.controller.init_state(batch_sizes[0], dev)
+        mem_state = self.memory.init_state(batch_sizes[0], dev)
+        state = dict(**ctrl_state, **mem_state)
 
-            ctrl_state = torch.cat((ctrl_out, ctrl_state[size:,]), dim=0)
-            read = torch.cat((read_out, read[size:,]), dim=0)
+        for b, size in zip(batches, batch_sizes):
+            old_state, state = state, self._idx_state(size)
+
+            ctrl_in = torch.cat((b, state['read']), dim=1)
+            state = self.controller(ctrl_in, state)
+            state = self.memory(state)
+
+            state = self._merge_state(state, old_state, size)
         
-        return ctrl_state[unsort_idxs], read[unsort_idxs]
+        return self._sort_state(unsort_idxs)
+    
+    def _idx_state(state, size):
+        return {k: v[:size,] for k, v in state.items()}
+    
+    def _merge_state(upd_state, old_state, size):
+        return {k: torch.cat((upd_state[k], old_state[k][size:,]), dim=0) for k in upd_state}
+    
+    def _sort_state(state, idxs):
+        return {k: v[idxs] for k, v in state.items()}
 
 
 class NtmLstmController(nn.Moduel):
-    def __init__(self, embedding_size=5, ctrl_size=32) -> None:
+    def __init__(self, embedding_size=5, ctrl_size=32, word_size=32) -> None:
         super().__init__()
 
         self.ctrl_size = ctrl_size
         self.embedding_size = embedding_size
+        self.word_size = word_size
 
         self.model = nn.LSTM(
             input_size=self.embedding_size,
@@ -1013,11 +1062,16 @@ class NtmLstmController(nn.Moduel):
             batch_first=True,
         )
         
+    def forward(self, ctrl_in, state):
+        _, (state['ctrl_hid'], state['ctrl_cell']) = self.model(ctrl_in, (state['ctrl_hid'], state['ctrl_cell']))
+        return state
     
-    # TODO: make the state passes work (may need additional mods)
-    def forward(self, ctrl_in, ctrl_state):
-        _, ctrl_out = self.model(ctrl_in, ctrl_state)  #TODO: prob concat hid and cell?
-        return ctrl_out
+    def init_state(self, batch_size, device='cpu'):
+        return {
+            'read': torch.zeros(batch_size, self.word_size, device=device),
+            'ctrl_hid': torch.zeros(batch_size, self.ctrl_size, device=device),
+            'ctrl_cell': torch.zeros(batch_size, self.ctrl_size, device=device)
+        }
 
 
 class NtmMemory(nn.Module):
@@ -1033,13 +1087,20 @@ class NtmMemory(nn.Module):
         self.fc_read = nn.Linear(ctrl_size, self.word_size + 6)   # key and address
         self.fc_write = nn.Linear(ctrl_size, 3 * self.word_size + 6)   # key, erase, add, and address
     
-    def forward(self, mem, ctrl_out, prev_w_write, prev_w_read):
-        write_info = self.fc_write(ctrl_out)
-        mem = self.write(mem, write_info, prev_w_write)
+    def init_state(self, batch_size, device='cpu'):
+        return {
+            'mem': torch.zeros(batch_size, self.mem_size, self.word_size, device=device),
+            'prev_w_write': torch.zeros(batch_size, self.word_size, device=device),
+            'prev_w_read': torch.zeros(batch_size, self.word_size, device=device)
+        }
+    
+    def forward(self, state):
+        write_info = self.fc_write(state['ctrl_io'])
+        state = self.write(state, write_info)
 
-        read_info = self.fc_read(ctrl_out)
-        read_out = self.read(mem, read_info, prev_w_read)
-        return mem, read_out
+        read_info = self.fc_read(state['ctrl_io'])
+        state = self.read(state, read_info)
+        return state
     
     def write(self, mem, write_info, prev_w):
         key, erase, add, beta, g, s, gamma = torch.split(write_info, 3 * [self.word_size] + [1, 1, 3, 1], dim=1)
@@ -1073,7 +1134,9 @@ class NtmMemory(nn.Module):
         return w
     
     def _conv(self, w, s):
-        pass # TODO: implement < -- STOPPED HERE
+        w = F.pad(w, (1, 1), mode='circular')
+        w = F.conv1d(w.reshape(1, 1, -1), s.reshape(1, 1, -1)).reshape(-1)
+        return w
 
         
 
