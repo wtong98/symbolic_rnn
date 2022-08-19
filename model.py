@@ -4,6 +4,7 @@ Model and dataset definitions
 author: William Tong (wtong@g.harvard.edu)
 """
 # <codecell>
+from curses.ascii import ctrl
 import itertools
 import functools
 import json
@@ -14,10 +15,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.optim import Adam
-from torch.utils.data import Dataset
-
+from torch.utils.data import Dataset, DataLoader, random_split
 
 class BinaryAdditionDataset(Dataset):
     def __init__(self, n_bits=4, onehot_out=False, 
@@ -27,6 +27,8 @@ class BinaryAdditionDataset(Dataset):
         """
         filter = {
             'max_value': max value representable by expression
+            'in_args': skip any expression with these input args
+            'out_args': skip any expression with these output args
         }
         """
         super().__init__()
@@ -37,7 +39,15 @@ class BinaryAdditionDataset(Dataset):
         self.max_noop = max_noop
         self.max_noop_only = max_noop_only
         self.little_endian = little_endian
-        self.filter = filter_ or {}
+
+        self.filter = {
+            'max_value': np.inf,
+            'in_args': [],
+            'out_args': []
+        }
+
+        for k, v in (filter_ or {}).items():
+            self.filter[k] = v
 
         self.end_token = '<END>'
         self.pad_token = '<PAD>'
@@ -76,8 +86,20 @@ class BinaryAdditionDataset(Dataset):
             in_toks_tmp = functools.reduce(lambda a, b: a + noops + (plus_idx,) + b, term)
             # in_toks = (end_idx,) + in_toks + (end_idx,)  # END_IDX forcibly removed
 
-            out_val = np.sum(self.tokens_to_args(in_toks_tmp))
-            if 'max_value' in self.filter and self.filter['max_value'] < out_val:
+            in_args = self.tokens_to_args(in_toks_tmp)
+            do_skip = False
+            for arg in self.filter['in_args']:
+                if arg in in_args:
+                    do_skip = True
+                    break
+            
+            if do_skip:
+                continue
+                    
+            out_val = np.sum(in_args)
+            if self.filter['max_value'] < out_val:
+                continue
+            if out_val in self.filter['out_args']:
                 continue
             if not self.onehot_out:
                 out_val = self.args_to_tokens(out_val, args_only=True)
@@ -151,6 +173,8 @@ class BinaryAdditionDataset(Dataset):
             else:
                 x = functools.reduce(lambda a, b: a + np.random.randint(self.max_noop+1) * (self.noop_idx,) + (self.plus_idx,) + b, x) \
                     + np.random.randint(self.max_noop+1) * (self.noop_idx,)
+        else:
+            x = functools.reduce(lambda a, b: a + (self.plus_idx,) + b, x)
 
         return torch.tensor(x), torch.tensor(y)
     
@@ -990,7 +1014,7 @@ class NtmClassifier(RnnClassifier):
         input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
         state = self.ntm(input_packed)
 
-        return torch.cat((state['ctrl_hid'], state['read']))
+        return torch.cat((state['ctrl_hid'], state['read']), dim=1)
     
     def trace(self, input_seq):
         raise NotImplementedError
@@ -1013,7 +1037,7 @@ class Ntm(nn.Module):
         super().__init__()
         
         self.controller = NtmLstmController(ctrl_size=ctrl_size, word_size=word_size)
-        self.memory = NtmMemory(ctrl_size=ctrl_size, n_read_heads=n_read_heads, n_write_heads=n_write_heads, mem_size=mem_size)
+        self.memory = NtmMemory(ctrl_size=ctrl_size, n_read_heads=n_read_heads, n_write_heads=n_write_heads, mem_size=mem_size, word_size=word_size)
     
     def forward(self, input_pack):
         dev = next(self.parameters()).device
@@ -1027,7 +1051,7 @@ class Ntm(nn.Module):
         state = dict(**ctrl_state, **mem_state)
 
         for b, size in zip(batches, batch_sizes):
-            old_state, state = state, self._idx_state(size)
+            old_state, state = state, self._idx_state(state, size)
 
             ctrl_in = torch.cat((b, state['read']), dim=1)
             state = self.controller(ctrl_in, state)
@@ -1035,19 +1059,19 @@ class Ntm(nn.Module):
 
             state = self._merge_state(state, old_state, size)
         
-        return self._sort_state(unsort_idxs)
+        return self._sort_state(state, unsort_idxs)
     
-    def _idx_state(state, size):
+    def _idx_state(self, state, size):
         return {k: v[:size,] for k, v in state.items()}
     
-    def _merge_state(upd_state, old_state, size):
+    def _merge_state(self, upd_state, old_state, size):
         return {k: torch.cat((upd_state[k], old_state[k][size:,]), dim=0) for k in upd_state}
     
-    def _sort_state(state, idxs):
+    def _sort_state(self, state, idxs):
         return {k: v[idxs] for k, v in state.items()}
 
 
-class NtmLstmController(nn.Moduel):
+class NtmLstmController(nn.Module):
     def __init__(self, embedding_size=5, ctrl_size=32, word_size=32) -> None:
         super().__init__()
 
@@ -1056,14 +1080,16 @@ class NtmLstmController(nn.Moduel):
         self.word_size = word_size
 
         self.model = nn.LSTM(
-            input_size=self.embedding_size,
+            input_size=self.embedding_size + self.word_size,
             hidden_size=self.ctrl_size,
             num_layers=1,   #TODO: consider multiple layers?
             batch_first=True,
         )
         
     def forward(self, ctrl_in, state):
-        _, (state['ctrl_hid'], state['ctrl_cell']) = self.model(ctrl_in, (state['ctrl_hid'], state['ctrl_cell']))
+        _, (new_hid, new_cell) = self.model(ctrl_in.unsqueeze(1), (state['ctrl_hid'].unsqueeze(0), state['ctrl_cell'].unsqueeze(0)))
+        state['ctrl_hid'] = new_hid.squeeze(0)
+        state['ctrl_cell'] = new_cell.squeeze(0)
         return state
     
     def init_state(self, batch_size, device='cpu'):
@@ -1086,32 +1112,43 @@ class NtmMemory(nn.Module):
 
         self.fc_read = nn.Linear(ctrl_size, self.word_size + 6)   # key and address
         self.fc_write = nn.Linear(ctrl_size, 3 * self.word_size + 6)   # key, erase, add, and address
+
+        self.register_buffer('mem_init', torch.Tensor(self.mem_size, self.word_size))
+        sd = 1 / np.sqrt(self.mem_size + self.word_size)
+        nn.init.uniform_(self.mem_init, -sd, sd)
     
     def init_state(self, batch_size, device='cpu'):
         return {
-            'mem': torch.zeros(batch_size, self.mem_size, self.word_size, device=device),
-            'prev_w_write': torch.zeros(batch_size, self.word_size, device=device),
-            'prev_w_read': torch.zeros(batch_size, self.word_size, device=device)
+            'mem': self.mem_init.clone().repeat(batch_size, 1, 1),
+            'prev_w_write': torch.zeros(batch_size, self.mem_size, device=device),
+            'prev_w_read': torch.zeros(batch_size, self.mem_size, device=device)
         }
     
     def forward(self, state):
-        write_info = self.fc_write(state['ctrl_io'])
+        write_info = self.fc_write(state['ctrl_hid'])
         state = self.write(state, write_info)
 
-        read_info = self.fc_read(state['ctrl_io'])
+        read_info = self.fc_read(state['ctrl_hid'])
         state = self.read(state, read_info)
         return state
     
-    def write(self, mem, write_info, prev_w):
+    def write(self, state, write_info):
+        mem = state['mem']
+        prev_w = state['prev_w_write']
+
         key, erase, add, beta, g, s, gamma = torch.split(write_info, 3 * [self.word_size] + [1, 1, 3, 1], dim=1)
         w = self.address(mem, key, beta, g, s, gamma, prev_w)
-        mem = mem * (1 - w.unsqueeze(-1) @ erase.unsqueeze(1)) + w.unsqueeze(-1) @ add.unsqueeze(1)
-        return mem
+        state['mem'] = mem * (1 - w.unsqueeze(-1) @ erase.unsqueeze(1)) + w.unsqueeze(-1) @ add.unsqueeze(1)
+        return state
 
-    def read(self, mem, read_info, prev_w):
+    def read(self, state, read_info):
+        mem = state['mem']
+        prev_w = state['prev_w_read']
+
         key, beta, g, s, gamma = torch.split(read_info, [self.word_size, 1, 1, 3, 1], dim=1)
         w = self.address(mem, key, beta, g, s, gamma, prev_w)
-        return (w.unsqueeze(1) @ mem).squeeze(1)
+        state['read'] = (w.unsqueeze(1) @ mem).squeeze(1)
+        return state
     
     def address(self, mem, key, beta, g, s, gamma, prev_w):
         # attention (content-based addressing)
@@ -1134,25 +1171,86 @@ class NtmMemory(nn.Module):
         return w
     
     def _conv(self, w, s):
-        w = F.pad(w, (1, 1), mode='circular')
+        w = torch.cat((w[-1:], w, w[:1]))
         w = F.conv1d(w.reshape(1, 1, -1), s.reshape(1, 1, -1)).reshape(-1)
         return w
 
         
-
-
-    
-    
-    
-
-            
 '''
-# %%
-model = BinaryAdditionFlatRNN(0)
-model.load('save/hid5_50k_vargs3_rnn_flat')
-print(model)
-# %%
-info = model.trace([3,1,2,1,3])
-print(info['out'])
+# <codecell>
+# TODO: try without using fixed max args
+ds = BinaryAdditionDataset(n_bits=2, 
+                           onehot_out=True, 
+                           max_args=3, 
+                           add_noop=True,
+                           max_noop=5,
+                        #    max_noop_only=True,
+                        #    max_only=True, 
+                           little_endian=False,
+                           filter_={
+                               'in_args': []
+                           })
+
+it = iter(ds)
+
+for _, val in zip(range(300), iter(ds)):
+    print(val)
+
+# <codecell>
+test_split = 0
+test_len = int(len(ds) * test_split)
+train_len = len(ds) - test_len
+
+train_ds, test_ds = random_split(ds, [train_len, test_len])
+if test_split == 0:
+    test_ds = ds
+
+train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+
+# <codecell>
+model = NtmClassifier(
+    max_arg=9,
+    embedding_size=5,
+    ctrl_size=100,
+    mem_size=100,
+    word_size=8,
+    vocab_size=6).cuda()
+
+# model.load('save/hid100k_vargs3_nbits3_linear')
+
+# <codecell>
+### TRAINING
+n_epochs = 100
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=5)
+
+print('done!')
+
+# <codecell>
+eval_every = 100
+def make_plots(losses, filename=None, eval_every=100):
+    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+    epochs = np.arange(len(losses['train'])) * eval_every
+    axs[0].plot(epochs, losses['train'], label='train loss')
+    axs[0].plot(epochs, losses['test'], label='test loss')
+    axs[0].set_xlabel('Epoch')
+    axs[0].set_ylabel('Loss')
+    axs[0].legend()
+
+    axs[1].plot(epochs, losses['tok_acc'], label='token-wise accuracy')
+    axs[1].plot(epochs, losses['arith_acc'], label='expression-wise accuracy')
+    axs[1].set_xlabel('Epoch')
+    axs[1].set_ylabel('Accuracy')
+    axs[1].legend()
+
+    fig.tight_layout()
+
+    if filename != None:
+        plt.savefig(filename)
+
+make_plots(losses)
+            
+
 # %%
 '''

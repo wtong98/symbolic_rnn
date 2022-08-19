@@ -210,20 +210,23 @@ train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_c
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
-model = LinearRnnClassifier(
+model = NtmClassifier(
     max_arg=21,
     embedding_size=5,
-    hidden_size=100,
+    ctrl_size=100,
+    mem_size=100,
+    word_size=8,
     vocab_size=6).cuda()
 
-model.load('save/hid100k_vargs3_nbits3_linear')
+# model.load('save/hid100k_vargs3_nbits3_linear')
 
 # <codecell>
 ### TRAINING
-n_epochs = 15000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4)
+n_epochs = 2000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=10)
 
 print('done!')
+model.save('save/ntm_nbits_3')
 
 # <codecell>
 eval_every = 100
@@ -250,6 +253,7 @@ def make_plots(losses, filename=None, eval_every=100):
 
 make_plots(losses)
 
+'''
 # <codecell>
 ### SIMPLE EVALUATION
 model.cpu()
@@ -388,10 +392,6 @@ print_test_case_direct(ds, model,
     [3,3]
 )
 
-
-# <codecell>
-# TODO: save vocab_size also
-model.save('save/lstm_nbits_3')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -579,3 +579,4 @@ plt.bar(plot_idxs, embs[sort_idxs][plot_idxs])
 # model.encoder_rnn.weight_hh_l0 @ embs
 
 # %%
+'''
