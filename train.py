@@ -91,6 +91,12 @@ class BinaryAdditionDataset(Dataset):
                     do_skip = True
                     break
             
+            # filter out zero starts
+            for t in term:
+                if t[0] == 0:
+                    do_skip = True
+                    break
+            
             if do_skip:
                 continue
                     
@@ -180,7 +186,7 @@ class BinaryAdditionDataset(Dataset):
         return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
-ds = BinaryAdditionDataset(n_bits=3, 
+ds = BinaryAdditionDataset(n_bits=4, 
                            onehot_out=True, 
                            max_args=3, 
                            add_noop=True,
@@ -210,23 +216,29 @@ train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_c
 test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
-model = NtmClassifier(
-    max_arg=21,
+# model = NtmClassifier(
+#     max_arg=9,
+#     embedding_size=5,
+#     ctrl_size=100,
+#     mem_size=100,
+#     word_size=32,
+#     vocab_size=6).cuda()
+
+model = RnnClassifier(
+    max_arg=45,
     embedding_size=5,
-    ctrl_size=100,
-    mem_size=100,
-    word_size=8,
+    hidden_size=100,
     vocab_size=6).cuda()
 
-# model.load('save/hid100k_vargs3_nbits3_linear')
+# model.load('save/ntm_nbits_3_5k')
 
 # <codecell>
 ### TRAINING
-n_epochs = 2000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=10)
+n_epochs = 10000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=100)
 
 print('done!')
-model.save('save/ntm_nbits_3')
+# model.save('save/ntm_nbits_3')
 
 # <codecell>
 eval_every = 100
@@ -253,7 +265,6 @@ def make_plots(losses, filename=None, eval_every=100):
 
 make_plots(losses)
 
-'''
 # <codecell>
 ### SIMPLE EVALUATION
 model.cpu()
@@ -387,11 +398,16 @@ print(f'Total acc: {correct / total:.4f}')
 #     [3,3]
 # )
 
+# TODO: try with soft exp on expanded dataset <-- STOPPED HERE
+# TODO: understand traj of relu_nbits3_nozeropad
 print_test_case_direct(ds, model,
-    [1, 0, 0, 5, 5, 5, 2, 1, 5, 5, 5],
+    [1, 0, 0, 0] + 0 * [5],
     [3,3]
 )
 
+
+# %%
+# model.save('save/relu_nbits3_nozeropad')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -421,8 +437,8 @@ test_seqs = [
     # [3, 0, 1, 2, 1, 3],
     # [3, 1, 2, 0, 1, 3],
     # [3, 1, 0, 3],
-    [0,0,0,0,1,0,2,1,5,5,5],
-    [1,1,5,5,5],
+    [0,0,0,0,1,0,2,1],
+    [1,1],
     # [3, 1, 2, 1, 2, 1, 2, 1, 3],
     # [3, 1, 1, 3]
     # [3, 0, 1, 2, 0, 1, 3],
@@ -476,7 +492,8 @@ pca.fit(W)
 
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
-    ds = BinaryAdditionDataset(n_bits=3, 
+    # n *= 20
+    ds = BinaryAdditionDataset(n_bits=4, 
                             onehot_out=True, 
                             max_args=3, 
                             add_noop=True,
@@ -514,7 +531,7 @@ for n, ax in zip(range(10), axs.ravel()):
 # TODO: what does it look like in 3D?
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/linear_cloud.png')
+plt.savefig('save/fig/tmp.png')
 
 # %%
 
@@ -579,4 +596,3 @@ plt.bar(plot_idxs, embs[sort_idxs][plot_idxs])
 # model.encoder_rnn.weight_hh_l0 @ embs
 
 # %%
-'''

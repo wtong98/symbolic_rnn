@@ -604,8 +604,10 @@ class RnnClassifier(Model):
             hidden_size=self.hidden_size,
             num_layers=self.n_layers,
             batch_first=True,
+            nonlinearity='relu'
         )
 
+        self.hidden = nn.Linear(self.hidden_size, 2 * self.hidden_size)
         self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)
 
     def encode(self, input_seq):
@@ -619,9 +621,22 @@ class RnnClassifier(Model):
 
         return enc_h[-1,...]   # last hidden layer
     
+    # TODO: try running for long time
     def forward(self, input_seq):
         enc_h = self.encode(input_seq)
-        logits = self.readout(enc_h)
+        hid = self.hidden(enc_h)
+        alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)  # TODO: impl fully: https://arxiv.org/pdf/1602.01321.pdf
+        alpha = torch.sigmoid(alpha)
+
+        # final_hid = torch.zeros(alpha.shape, device=next(self.parameters()).device)
+        # final_hid[alpha>0] = ((2 ** (alpha * hid) - 1) / alpha + alpha)[alpha>0]
+        # final_hid[alpha==0] = hid[alpha==0]
+        # final_hid[alpha<0] = (-torch.log2(1 - alpha * (hid + alpha))/alpha)[alpha<0]
+
+        # hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+        hid = 2 ** hid
+
+        logits = self.readout(hid)
         return logits
 
     def trace(self, input_seq):
@@ -647,7 +662,8 @@ class RnnClassifier(Model):
 
             in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
             hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
-            hidden = torch.tanh(in_act + hid_act)
+            # hidden = torch.tanh(in_act + hid_act)
+            hidden = torch.relu(in_act + hid_act)
             info['enc']['hidden'].append(hidden)
         
         logits = self.readout(hidden.T).squeeze()
@@ -923,7 +939,7 @@ class LinearRnnClassifier(RnnClassifier):
 
             in_act = e.ih.weight @ x + e.ih.bias.data.unsqueeze(1)
             hid_act = e.hh.weight @ hidden + e.hh.bias.data.unsqueeze(1)
-            hidden = torch.tanh(in_act + hid_act)
+            hidden = in_act + hid_act
             info['enc']['hidden'].append(hidden)
         
         logits = self.readout(hidden.T).squeeze()
