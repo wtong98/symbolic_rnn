@@ -633,8 +633,8 @@ class RnnClassifier(Model):
         # final_hid[alpha==0] = hid[alpha==0]
         # final_hid[alpha<0] = (-torch.log2(1 - alpha * (hid + alpha))/alpha)[alpha<0]
 
-        # hid = (2 ** (alpha * hid) - 1) / alpha + alpha
-        hid = 2 ** hid
+        hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+        # hid = 2 ** hid
 
         logits = self.readout(hid)
         return logits

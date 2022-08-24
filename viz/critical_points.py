@@ -24,7 +24,7 @@ ds = BinaryAdditionDataset(n_bits=3,
                            little_endian=False)
 
 model = RnnClassifier(max_arg=6)
-model.load('../save/nbits_4')
+model.load('../save/relu_nbits3_nozeropad')
 
 
 # <codecell>
@@ -73,10 +73,11 @@ def optim(model, seq, h_init_idx, tok_idx):
 
 # <codecell>
 all_seqs = [
-    # [1, 5, 5, 5] + 44 * [2, 1, 5, 5, 5],
+    [1, 0, 0, 5, 5, 5] + [1, 0, 0, 5, 5, 5],
+    [1, 0, 0, 0, 0, 0, 5, 5, 5]
     # [1, 0, 5, 5, 5] + 9 * [2, 1, 0, 5, 5, 5]
-    [1, 0, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5],
-    [1, 0, 0, 0, 5, 5, 5] + [2, 1, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5]
+    # [1, 0, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5],
+    # [1, 0, 0, 0, 5, 5, 5] + [2, 1, 0, 0, 0, 5, 5, 5] + [2, 1, 5, 5, 5]
 ]
 
 # all_results = []
@@ -163,5 +164,5 @@ handles = [
 ]
 
 plt.legend(handles=handles)
-plt.savefig('../save/fig/rnn_noop_cloud_with_crit_nbit_4_comp.png')
+plt.savefig('../save/fig/rnn_relu_exp_nozeropad_nbits3.png')
 # %%

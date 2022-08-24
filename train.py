@@ -186,7 +186,7 @@ class BinaryAdditionDataset(Dataset):
         return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
-ds = BinaryAdditionDataset(n_bits=4, 
+ds = BinaryAdditionDataset(n_bits=5, 
                            onehot_out=True, 
                            max_args=3, 
                            add_noop=True,
@@ -224,18 +224,18 @@ test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_work
 #     word_size=32,
 #     vocab_size=6).cuda()
 
-model = RnnClassifier(
-    max_arg=45,
-    embedding_size=5,
-    hidden_size=100,
+model = LstmClassifier(
+    max_arg=93,
+    embedding_size=32,
+    hidden_size=256,
     vocab_size=6).cuda()
 
 # model.load('save/ntm_nbits_3_5k')
 
 # <codecell>
 ### TRAINING
-n_epochs = 10000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=100)
+n_epochs = 1000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=25)
 
 print('done!')
 # model.save('save/ntm_nbits_3')
@@ -401,7 +401,7 @@ print(f'Total acc: {correct / total:.4f}')
 # TODO: try with soft exp on expanded dataset <-- STOPPED HERE
 # TODO: understand traj of relu_nbits3_nozeropad
 print_test_case_direct(ds, model,
-    [1, 0, 0, 0] + 0 * [5],
+    [1, 0, 0, 2, 1, 0, 0],
     [3,3]
 )
 
