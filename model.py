@@ -189,8 +189,10 @@ class Model(nn.Module):
         self.end_idx = end_idx
         self.padding_idx = padding_idx
 
+    # TODO: tmp switch to MSE loss
     def loss(self, logits, targets):
-        return nn.functional.cross_entropy(logits, targets)
+        # return nn.functional.cross_entropy(logits, targets)
+        return nn.functional.mse_loss(logits, targets.unsqueeze(1))
     
     def save(self, path, params):
         if type(path) == str:
@@ -608,7 +610,8 @@ class RnnClassifier(Model):
         )
 
         self.hidden = nn.Linear(self.hidden_size, 2 * self.hidden_size)
-        self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)
+        # self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)  
+        self.readout = nn.Linear(self.hidden_size, 1)  # TODO: tmp switch to MSE loss
 
     def encode(self, input_seq):
         input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
@@ -899,18 +902,48 @@ class LinearRNN(nn.Module):
 
         hidden = torch.zeros(batch_sizes[0], self.hidden_size).to(dev)
         for b, size in zip(batches, batch_sizes):
-            hidden_chunk = self.ih(b) + self.hh(hidden[:size,...])
+            hidden_chunk = torch.tanh(self.ih(b) + self.hh(hidden[:size,...]))
+            hidden = torch.cat((hidden_chunk, hidden[size:,...]), dim=0)
+
+        hidden = hidden[unsort_idxs]
+        return None, hidden.unsqueeze(0)
+
+class LinearRNNwithSoftExp(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.ih = nn.Linear(input_size, hidden_size)
+        self.hh = nn.Linear(hidden_size, 2 * hidden_size)
+
+    def forward(self, input_pack):
+        dev = next(self.parameters()).device
+
+        data, batch_sizes, _, unsort_idxs = input_pack
+        batch_idxs = batch_sizes.cumsum(0)
+        batches = torch.tensor_split(data, batch_idxs[:-1])
+
+        hidden = torch.zeros(batch_sizes[0], self.hidden_size).to(dev)
+        for b, size in zip(batches, batch_sizes):
+            hid = self.hh(hidden[:size,...])
+
+            alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)
+            alpha = torch.sigmoid(alpha)
+            hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+
+            hidden_chunk = torch.tanh(self.ih(b) + hid)
             hidden = torch.cat((hidden_chunk, hidden[size:,...]), dim=0)
 
         hidden = hidden[unsort_idxs]
         return None, hidden.unsqueeze(0)
 
 
+
 class LinearRnnClassifier(RnnClassifier):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.encoder_rnn = LinearRNN(
+        self.encoder_rnn = LinearRNNwithSoftExp(
             input_size=self.embedding_size,
             hidden_size=self.hidden_size,
             num_layers=self.n_layers,
@@ -962,7 +995,7 @@ class LstmClassifier(RnnClassifier):
     def trace(self, input_seq):
         e = self.encoder_rnn
         sig = torch.sigmoid
-        tanh = torch.tanh
+        tanh = torch.relu
         input_seq = torch.tensor(input_seq)
 
         input_emb = self.embedding(input_seq)

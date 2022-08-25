@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.decomposition import PCA
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, ConcatDataset
 
 from model import *
 
@@ -180,13 +180,13 @@ class BinaryAdditionDataset(Dataset):
         else:
             x = functools.reduce(lambda a, b: a + (self.plus_idx,) + b, x)
 
-        return torch.tensor(x), torch.tensor(y)
+        return torch.tensor(x), torch.tensor(y, dtype=torch.float32)
     
     def __len__(self):
         return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
-ds = BinaryAdditionDataset(n_bits=5, 
+ds_full = BinaryAdditionDataset(n_bits=4, 
                            onehot_out=True, 
                            max_args=3, 
                            add_noop=True,
@@ -198,10 +198,60 @@ ds = BinaryAdditionDataset(n_bits=5,
                                'in_args': []
                            })
 
+ds_args_only = [
+    BinaryAdditionDataset(n_bits=7, 
+                           onehot_out=True, 
+                           max_args=1, 
+                           add_noop=True,
+                           max_noop=5,
+                        #    max_noop_only=True,
+                        #    max_only=True, 
+                           little_endian=False,
+                           filter_={
+                               'in_args': []
+                           })
+    for _ in range(100)
+]
+
+# ds = ConcatDataset([ds_full] + ds_args_only)
+# ds.pad_collate = ds_full.pad_collate
+ds = ds_args_only[0]
+
 it = iter(ds)
 
 for _, val in zip(range(300), iter(ds)):
     print(val)
+
+# <codecell> 
+# TMP DATASET with correct zero patterns
+class CustomDataset(Dataset):
+    def __init__(self):
+        self.examples = [
+            ([1], 1),
+            ([1, 0], 2),
+            ([1, 0, 0], 4),
+            ([1, 0, 0, 0], 8),
+            ([1, 0, 0, 0, 0], 16),
+            ([1, 0, 0, 0, 0, 0], 32),
+            ([1, 0, 0, 0, 0, 0, 0], 64),
+        ]
+    
+    def __getitem__(self, idx):
+        ex = self.examples[idx]
+        return torch.tensor(ex[0]), torch.tensor(ex[1], dtype=torch.float32)
+    
+    def __len__(self):
+        return len(self.examples)
+
+    def pad_collate(self, batch):
+        xs, ys = zip(*batch)
+        pad_id = 4
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+        ys_out = torch.stack(ys)
+        return xs_out, ys_out
+
+ds = CustomDataset()
+print(list(ds))
 
 # <codecell>
 test_split = 0
@@ -224,22 +274,23 @@ test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_work
 #     word_size=32,
 #     vocab_size=6).cuda()
 
-model = LstmClassifier(
-    max_arg=93,
+model = RnnClassifier(
+    max_arg=0,
     embedding_size=32,
     hidden_size=256,
     vocab_size=6).cuda()
 
-# model.load('save/ntm_nbits_3_5k')
+# model.load('save/relu_nbits5_nozeropad')
 
 # <codecell>
 ### TRAINING
-n_epochs = 1000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=25)
+n_epochs = 3000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=100)
 
 print('done!')
 # model.save('save/ntm_nbits_3')
 
+# TODO: clean up, make plots, and report <-- STOPPED HERE
 # <codecell>
 eval_every = 100
 def make_plots(losses, filename=None, eval_every=100):
@@ -401,7 +452,7 @@ print(f'Total acc: {correct / total:.4f}')
 # TODO: try with soft exp on expanded dataset <-- STOPPED HERE
 # TODO: understand traj of relu_nbits3_nozeropad
 print_test_case_direct(ds, model,
-    [1, 0, 0, 2, 1, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0] + 0 * [5],
     [3,3]
 )
 
@@ -478,6 +529,7 @@ plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
 
 # %%
+model.save('save/relu_nbits5_nozeropad')
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
@@ -493,7 +545,7 @@ pca.fit(W)
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
     # n *= 20
-    ds = BinaryAdditionDataset(n_bits=4, 
+    ds = BinaryAdditionDataset(n_bits=5, 
                             onehot_out=True, 
                             max_args=3, 
                             add_noop=True,
