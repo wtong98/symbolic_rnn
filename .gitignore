@@ -3,3 +3,4 @@ save/
 __pycache__/
 *.png
 *.npy
+update_docs/

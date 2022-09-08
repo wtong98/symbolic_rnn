@@ -19,11 +19,12 @@ from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader, random_split
 
+
 class BinaryAdditionDataset(Dataset):
     def __init__(self, n_bits=4, onehot_out=False, 
-                       max_args = 2, max_only=False, 
+                       max_args = 2, max_only=False, use_zero_pad=True,
                        add_noop=False, max_noop=3, max_noop_only=False,
-                       little_endian=False, filter_=None) -> None:
+                       float_labels=False, little_endian=False, filter_=None) -> None:
         """
         filter = {
             'max_value': max value representable by expression
@@ -35,9 +36,11 @@ class BinaryAdditionDataset(Dataset):
         self.n_bits = n_bits
         self.onehot_out = onehot_out
         self.max_args = max_args
+        self.use_zero_pad = use_zero_pad
         self.add_noop = add_noop
         self.max_noop = max_noop
         self.max_noop_only = max_noop_only
+        self.float_labels = float_labels
         self.little_endian = little_endian
 
         self.filter = {
@@ -92,6 +95,13 @@ class BinaryAdditionDataset(Dataset):
                 if arg in in_args:
                     do_skip = True
                     break
+            
+            # filter out zero starts
+            if not self.use_zero_pad:
+                for t in term:
+                    if t[0] == 0:
+                        do_skip = True
+                        break
             
             if do_skip:
                 continue
@@ -176,23 +186,26 @@ class BinaryAdditionDataset(Dataset):
         else:
             x = functools.reduce(lambda a, b: a + (self.plus_idx,) + b, x)
 
-        return torch.tensor(x), torch.tensor(y)
+        dtype = torch.float32 if self.float_labels else torch.long
+        return torch.tensor(x), torch.tensor(y, dtype=dtype)
     
     def __len__(self):
         return len(self.examples)
 
 
 class Model(nn.Module):
-    def __init__(self, vocab_size=6, end_idx=3, padding_idx=4) -> None:
+    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4) -> None:
         super().__init__()
+        self.loss_func = loss_func
         self.vocab_size=vocab_size
         self.end_idx = end_idx
         self.padding_idx = padding_idx
 
-    # TODO: tmp switch to MSE loss
     def loss(self, logits, targets):
-        # return nn.functional.cross_entropy(logits, targets)
-        return nn.functional.mse_loss(logits, targets.unsqueeze(1))
+        if self.loss_func == 'bce':
+            return nn.functional.cross_entropy(logits, targets)
+        else:
+            return nn.functional.mse_loss(logits, targets.unsqueeze(1))
     
     def save(self, path, params):
         if type(path) == str:
@@ -592,13 +605,16 @@ class Seq2SeqLstmModel(Seq2SeqRnnModel):
 
 
 class RnnClassifier(Model):
-    def __init__(self, max_arg, embedding_size=5, hidden_size=100, n_layers=1, **kwargs) -> None:
+    def __init__(self, max_arg, nonlinearity='tanh', use_softexp=False,
+                 embedding_size=5, hidden_size=100, n_layers=1, **kwargs) -> None:
         super().__init__(**kwargs)
 
         self.max_arg = max_arg
         self.embedding_size = embedding_size
         self.hidden_size = hidden_size
         self.n_layers = n_layers
+        self.nonlinearity = nonlinearity
+        self.use_softexp = use_softexp
 
         self.embedding = nn.Embedding(self.vocab_size, self.embedding_size)
         self.encoder_rnn = nn.RNN(
@@ -606,12 +622,18 @@ class RnnClassifier(Model):
             hidden_size=self.hidden_size,
             num_layers=self.n_layers,
             batch_first=True,
-            nonlinearity='relu'
+            nonlinearity=nonlinearity
         )
 
-        self.hidden = nn.Linear(self.hidden_size, 2 * self.hidden_size)
-        # self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)  
-        self.readout = nn.Linear(self.hidden_size, 1)  # TODO: tmp switch to MSE loss
+        if self.use_softexp:
+            self.hidden = nn.Linear(self.hidden_size, 2 * self.hidden_size)
+
+        if self.loss_func == 'bce':
+            self.readout = nn.Linear(self.hidden_size, self.max_arg + 1)  
+        elif self.loss_func == 'mse':
+            self.readout = nn.Linear(self.hidden_size, 1)
+        else:
+            raise ValueError('loss_func should be either "bce" or "mse"')
 
     def encode(self, input_seq):
         input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
@@ -624,20 +646,21 @@ class RnnClassifier(Model):
 
         return enc_h[-1,...]   # last hidden layer
     
-    # TODO: try running for long time
     def forward(self, input_seq):
-        enc_h = self.encode(input_seq)
-        hid = self.hidden(enc_h)
-        alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)  # TODO: impl fully: https://arxiv.org/pdf/1602.01321.pdf
-        alpha = torch.sigmoid(alpha)
+        hid = self.encode(input_seq)
 
-        # final_hid = torch.zeros(alpha.shape, device=next(self.parameters()).device)
-        # final_hid[alpha>0] = ((2 ** (alpha * hid) - 1) / alpha + alpha)[alpha>0]
-        # final_hid[alpha==0] = hid[alpha==0]
-        # final_hid[alpha<0] = (-torch.log2(1 - alpha * (hid + alpha))/alpha)[alpha<0]
+        if self.use_softexp:
+            hid = self.hidden(hid)
+            alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)  # TODO: impl fully: https://arxiv.org/pdf/1602.01321.pdf
+            alpha = torch.sigmoid(alpha)
 
-        hid = (2 ** (alpha * hid) - 1) / alpha + alpha
-        # hid = 2 ** hid
+            # final_hid = torch.zeros(alpha.shape, device=next(self.parameters()).device)
+            # final_hid[alpha>0] = ((2 ** (alpha * hid) - 1) / alpha + alpha)[alpha>0]
+            # final_hid[alpha==0] = hid[alpha==0]
+            # final_hid[alpha<0] = (-torch.log2(1 - alpha * (hid + alpha))/alpha)[alpha<0]
+
+            hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+            # hid = 2 ** hid
 
         logits = self.readout(hid)
         return logits
@@ -645,6 +668,7 @@ class RnnClassifier(Model):
     def trace(self, input_seq):
         e = self.encoder_rnn
         input_seq = torch.tensor(input_seq)
+        activ_f = torch.tanh if self.nonlinearity == 'tanh' else torch.relu
 
         input_emb = self.embedding(input_seq)
         hidden = torch.zeros((self.hidden_size, 1))
@@ -665,10 +689,16 @@ class RnnClassifier(Model):
 
             in_act = e.weight_ih_l0 @ x + e.bias_ih_l0.data.unsqueeze(1)
             hid_act = e.weight_hh_l0 @ hidden + e.bias_hh_l0.data.unsqueeze(1)
-            # hidden = torch.tanh(in_act + hid_act)
-            hidden = torch.relu(in_act + hid_act)
+            hidden = activ_f(in_act + hid_act)
             info['enc']['hidden'].append(hidden)
         
+        if self.use_softexp:
+            hid = self.hidden(hidden.T)
+            alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)
+            alpha = torch.sigmoid(alpha)
+            hidden = (2 ** (alpha * hid) - 1) / alpha + alpha
+            hidden = hidden.T
+            
         logits = self.readout(hidden.T).squeeze()
         info['logits'] = logits
         info['out'] = torch.argmax(logits)

@@ -19,9 +19,9 @@ from model import *
 
 class BinaryAdditionDataset(Dataset):
     def __init__(self, n_bits=4, onehot_out=False, 
-                       max_args = 2, max_only=False, 
+                       max_args = 2, max_only=False, use_zero_pad=True,
                        add_noop=False, max_noop=3, max_noop_only=False,
-                       little_endian=False, filter_=None) -> None:
+                       float_labels=False, little_endian=False, filter_=None) -> None:
         """
         filter = {
             'max_value': max value representable by expression
@@ -33,9 +33,11 @@ class BinaryAdditionDataset(Dataset):
         self.n_bits = n_bits
         self.onehot_out = onehot_out
         self.max_args = max_args
+        self.use_zero_pad = use_zero_pad
         self.add_noop = add_noop
         self.max_noop = max_noop
         self.max_noop_only = max_noop_only
+        self.float_labels = float_labels
         self.little_endian = little_endian
 
         self.filter = {
@@ -92,10 +94,11 @@ class BinaryAdditionDataset(Dataset):
                     break
             
             # filter out zero starts
-            for t in term:
-                if t[0] == 0:
-                    do_skip = True
-                    break
+            if not self.use_zero_pad:
+                for t in term:
+                    if t[0] == 0:
+                        do_skip = True
+                        break
             
             if do_skip:
                 continue
@@ -180,17 +183,20 @@ class BinaryAdditionDataset(Dataset):
         else:
             x = functools.reduce(lambda a, b: a + (self.plus_idx,) + b, x)
 
-        return torch.tensor(x), torch.tensor(y, dtype=torch.float32)
+        dtype = torch.float32 if self.float_labels else torch.long
+        return torch.tensor(x), torch.tensor(y, dtype=dtype)
     
     def __len__(self):
         return len(self.examples)
 # <codecell>
 # TODO: try without using fixed max args
-ds_full = BinaryAdditionDataset(n_bits=4, 
+ds_full = BinaryAdditionDataset(n_bits=3, 
                            onehot_out=True, 
                            max_args=3, 
                            add_noop=True,
                            max_noop=5,
+                           use_zero_pad=True,
+                           float_labels=True,
                         #    max_noop_only=True,
                         #    max_only=True, 
                            little_endian=False,
@@ -204,18 +210,21 @@ ds_args_only = [
                            max_args=1, 
                            add_noop=True,
                            max_noop=5,
+                           use_zero_pad=False,
+                           float_labels=True,
                         #    max_noop_only=True,
                         #    max_only=True, 
                            little_endian=False,
                            filter_={
                                'in_args': []
                            })
-    for _ in range(100)
+    for _ in range(1)
 ]
 
 # ds = ConcatDataset([ds_full] + ds_args_only)
 # ds.pad_collate = ds_full.pad_collate
 ds = ds_args_only[0]
+# ds = ds_args_only[0]
 
 it = iter(ds)
 
@@ -278,19 +287,21 @@ model = RnnClassifier(
     max_arg=0,
     embedding_size=32,
     hidden_size=256,
-    vocab_size=6).cuda()
+    vocab_size=6,
+    nonlinearity='tanh',
+    use_softexp=True,
+    loss_func='mse').cuda()
 
-# model.load('save/relu_nbits5_nozeropad')
+# model.load('save/hid100k_vargs3_nbits3')
 
 # <codecell>
 ### TRAINING
-n_epochs = 3000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=100)
+n_epochs = 5000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
 
 print('done!')
 # model.save('save/ntm_nbits_3')
 
-# TODO: clean up, make plots, and report <-- STOPPED HERE
 # <codecell>
 eval_every = 100
 def make_plots(losses, filename=None, eval_every=100):
@@ -545,8 +556,9 @@ pca.fit(W)
 # TODO: plot along same PC's?
 for n, ax in zip(range(10), axs.ravel()):
     # n *= 20
-    ds = BinaryAdditionDataset(n_bits=5, 
+    ds = BinaryAdditionDataset(n_bits=3, 
                             onehot_out=True, 
+                            use_zero_pad=True,
                             max_args=3, 
                             add_noop=True,
                             max_noop=n,
@@ -580,13 +592,13 @@ for n, ax in zip(range(10), axs.ravel()):
     mpb = ax.scatter(all_points[0,:], all_points[1,:], c=all_labs_true)
     ax.set_title(f'n_noops = {n}')
 
-# TODO: what does it look like in 3D?
+# TODO: formally measure embedding dim of activations
 fig.colorbar(mpb)
 fig.tight_layout()
-plt.savefig('save/fig/tmp.png')
+plt.savefig('save/fig/rnn_relu_softexp_nbits3_mse.png')
 
 # %%
-
+pca.explained_variance_ratio_
 # <codecell>
 plt.scatter(all_points[0,:], all_points[1,:], c=all_labs_pred)
 plt.legend()
