@@ -13,7 +13,7 @@ sys.path.append('../')
 
 from model import *
 
-def run_case(model_params, ds_params_set, n_epochs=3000, n_zeros=20):
+def run_case(model_params, ds_params_set, n_epochs=1000, n_zeros=20):
     model = RnnClassifier(**model_params).cuda()
     results = []
 
@@ -100,5 +100,9 @@ for c in case_set:
 
 plt.yscale('log', base=2)
 plt.legend()
+plt.xlabel('Number of zeros')
+plt.ylabel('Numeric value')
+
+plt.savefig('../save/fig/zeros_extrapolation.png')
 
 # %%

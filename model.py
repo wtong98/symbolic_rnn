@@ -194,18 +194,32 @@ class BinaryAdditionDataset(Dataset):
 
 
 class Model(nn.Module):
-    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4) -> None:
+    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0) -> None:
         super().__init__()
         self.loss_func = loss_func
         self.vocab_size=vocab_size
         self.end_idx = end_idx
         self.padding_idx = padding_idx
 
+        self.ewc_weight = ewc_weight
+        self.use_ewc = False
+        self.old_params = None
+        self.fisher_info = None
+
     def loss(self, logits, targets):
+        ewc_loss = 0
+        loss = 0
+
+        if self.use_ewc:
+            curr_params = torch.concat([p.flatten() for p in self.parameters()])
+            ewc_loss = torch.sum(self.fisher_info * (curr_params - self.old_params) ** 2)
+
         if self.loss_func == 'bce':
-            return nn.functional.cross_entropy(logits, targets)
+            loss = nn.functional.cross_entropy(logits, targets) 
         else:
-            return nn.functional.mse_loss(logits, targets.unsqueeze(1))
+            loss = nn.functional.mse_loss(logits, targets.unsqueeze(1))
+        
+        return loss + self.ewc_weight * ewc_loss
     
     def save(self, path, params):
         if type(path) == str:
@@ -235,6 +249,32 @@ class Model(nn.Module):
     
     def evaluate(self, test_dl):
         raise NotImplementedError
+    
+    def fix_ewc(self, train_dl):
+        self.old_params = []
+        self.fisher_info = []
+
+        for p in self.parameters():
+            p.grad.zero_()
+
+        for x, y in train_dl:
+            x = x.cuda()
+            y = y.cuda()
+
+            # TODO: only works with *Classifier models
+            logits = self(x)
+            loss = self.loss(logits, y)
+            loss.backward()
+            
+
+        for p in self.parameters():
+            self.old_params.append(p.data.detach().flatten())
+            grad = p.grad.detach().flatten()
+            self.fisher_info.append(grad ** 2 / len(train_dl))
+        
+        self.old_params = torch.concat(self.old_params)
+        self.fisher_info = torch.concat(self.fisher_info)
+        self.use_ewc = True
     
     def learn(self, n_epochs, train_dl, test_dl, eval_every=100, logging=True, **optim_args):
         self.optimizer = Adam(self.parameters(), **optim_args)
@@ -1254,7 +1294,7 @@ class NtmMemory(nn.Module):
         w = F.conv1d(w.reshape(1, 1, -1), s.reshape(1, 1, -1)).reshape(-1)
         return w
 
-        
+
 '''
 # <codecell>
 # TODO: try without using fixed max args

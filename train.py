@@ -204,8 +204,7 @@ ds_full = BinaryAdditionDataset(n_bits=3,
                                'in_args': []
                            })
 
-ds_args_only = [
-    BinaryAdditionDataset(n_bits=7, 
+ds_args_only = BinaryAdditionDataset(n_bits=7, 
                            onehot_out=True, 
                            max_args=1, 
                            add_noop=True,
@@ -218,61 +217,20 @@ ds_args_only = [
                            filter_={
                                'in_args': []
                            })
-    for _ in range(1)
-]
 
-# ds = ConcatDataset([ds_full] + ds_args_only)
-# ds.pad_collate = ds_full.pad_collate
-ds = ds_args_only[0]
-# ds = ds_args_only[0]
+def make_dl(ds):
+    test_split = 0
+    test_len = int(len(ds) * test_split)
+    train_len = len(ds) - test_len
 
-it = iter(ds)
+    train_ds, test_ds = random_split(ds, [train_len, test_len])
+    if test_split == 0:
+        test_ds = ds
 
-for _, val in zip(range(300), iter(ds)):
-    print(val)
+    train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    return train_dl, test_dl
 
-# <codecell> 
-# TMP DATASET with correct zero patterns
-class CustomDataset(Dataset):
-    def __init__(self):
-        self.examples = [
-            ([1], 1),
-            ([1, 0], 2),
-            ([1, 0, 0], 4),
-            ([1, 0, 0, 0], 8),
-            ([1, 0, 0, 0, 0], 16),
-            ([1, 0, 0, 0, 0, 0], 32),
-            ([1, 0, 0, 0, 0, 0, 0], 64),
-        ]
-    
-    def __getitem__(self, idx):
-        ex = self.examples[idx]
-        return torch.tensor(ex[0]), torch.tensor(ex[1], dtype=torch.float32)
-    
-    def __len__(self):
-        return len(self.examples)
-
-    def pad_collate(self, batch):
-        xs, ys = zip(*batch)
-        pad_id = 4
-        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
-        ys_out = torch.stack(ys)
-        return xs_out, ys_out
-
-ds = CustomDataset()
-print(list(ds))
-
-# <codecell>
-test_split = 0
-test_len = int(len(ds) * test_split)
-train_len = len(ds) - test_len
-
-train_ds, test_ds = random_split(ds, [train_len, test_len])
-if test_split == 0:
-    test_ds = ds
-
-train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
-test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
 
 # <codecell>
 # model = NtmClassifier(
@@ -288,16 +246,40 @@ model = RnnClassifier(
     embedding_size=32,
     hidden_size=256,
     vocab_size=6,
-    nonlinearity='tanh',
+    nonlinearity='relu',
     use_softexp=True,
+    ewc_weight=1,
     loss_func='mse').cuda()
 
 # model.load('save/hid100k_vargs3_nbits3')
 
 # <codecell>
 ### TRAINING
-n_epochs = 5000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
+# train_dl, test_dl = make_dl(ds_args_only)
+# n_epochs = 5000
+# losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
+
+# model.fix_ewc(train_dl)
+# print(model.old_params)
+
+# train_dl, test_dl = make_dl(ds_full)
+# n_epochs = 200
+# losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
+
+ds_all = ConcatDataset([ds_args_only, ds_full])
+ds_all.pad_collate = ds_args_only.pad_collate
+train_dl, test_dl = make_dl(ds_all)
+
+# <codecell>
+n_epochs = 3000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=3e-5, eval_every=100)
+
+# model.fix_ewc(train_dl)
+# print(model.old_params)
+
+# n_epochs = 200
+# losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
+
 
 print('done!')
 # model.save('save/ntm_nbits_3')
