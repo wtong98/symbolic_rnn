@@ -4,7 +4,6 @@ Model and dataset definitions
 author: William Tong (wtong@g.harvard.edu)
 """
 # <codecell>
-from curses.ascii import ctrl
 import itertools
 import functools
 import json
@@ -691,7 +690,7 @@ class RnnClassifier(Model):
 
         if self.use_softexp:
             hid = self.hidden(hid)
-            alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)  # TODO: impl fully: https://arxiv.org/pdf/1602.01321.pdf
+            alpha, hid = torch.split(hid, [self.hidden_size, self.hidden_size], dim=1)
             alpha = torch.sigmoid(alpha)
 
             # final_hid = torch.zeros(alpha.shape, device=next(self.parameters()).device)
@@ -699,7 +698,8 @@ class RnnClassifier(Model):
             # final_hid[alpha==0] = hid[alpha==0]
             # final_hid[alpha<0] = (-torch.log2(1 - alpha * (hid + alpha))/alpha)[alpha<0]
 
-            hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+            # hid = (2 ** (alpha * hid) - 1) / alpha + alpha
+            hid = alpha * 2 ** hid + (1 - alpha) * hid   # swap to linear interpolation
             # hid = 2 ** hid
 
         logits = self.readout(hid)
@@ -1294,8 +1294,8 @@ class NtmMemory(nn.Module):
         w = F.conv1d(w.reshape(1, 1, -1), s.reshape(1, 1, -1)).reshape(-1)
         return w
 
-
 '''
+
 # <codecell>
 # TODO: try without using fixed max args
 ds = BinaryAdditionDataset(n_bits=2, 

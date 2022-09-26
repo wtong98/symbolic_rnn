@@ -209,7 +209,7 @@ ds_args_only = BinaryAdditionDataset(n_bits=7,
                            max_args=1, 
                            add_noop=True,
                            max_noop=5,
-                           use_zero_pad=False,
+                           use_zero_pad=True,
                            float_labels=True,
                         #    max_noop_only=True,
                         #    max_only=True, 
@@ -219,16 +219,16 @@ ds_args_only = BinaryAdditionDataset(n_bits=7,
                            })
 
 def make_dl(ds):
-    test_split = 0
-    test_len = int(len(ds) * test_split)
-    train_len = len(ds) - test_len
+    # test_split = 0
+    # test_len = int(len(ds) * test_split)
+    # train_len = len(ds) - test_len
 
-    train_ds, test_ds = random_split(ds, [train_len, test_len])
-    if test_split == 0:
-        test_ds = ds
+    # train_ds, test_ds = random_split(ds, [train_len, test_len])
+    # if test_split == 0:
+    #     test_ds = ds
 
-    train_dl = DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
-    test_dl = DataLoader(test_ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    train_dl = DataLoader(ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    test_dl = DataLoader(ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
     return train_dl, test_dl
 
 
@@ -248,7 +248,6 @@ model = RnnClassifier(
     vocab_size=6,
     nonlinearity='relu',
     use_softexp=True,
-    ewc_weight=1,
     loss_func='mse').cuda()
 
 # model.load('save/hid100k_vargs3_nbits3')
@@ -270,9 +269,11 @@ ds_all = ConcatDataset([ds_args_only, ds_full])
 ds_all.pad_collate = ds_args_only.pad_collate
 train_dl, test_dl = make_dl(ds_all)
 
+print(list(zip(ds_all, range(300))))
+
 # <codecell>
-n_epochs = 3000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=3e-5, eval_every=100)
+n_epochs = 10000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=2e-5, eval_every=100)
 
 # model.fix_ewc(train_dl)
 # print(model.old_params)
@@ -522,7 +523,7 @@ plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
 
 # %%
-model.save('save/relu_nbits5_nozeropad')
+model.save('save/relu_mse_interleaved_lin_interp')
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
