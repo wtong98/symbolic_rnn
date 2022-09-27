@@ -763,7 +763,8 @@ class RnnClassifier(Model):
             'max_arg': self.max_arg,
             'embedding_size': self.embedding_size,
             'hidden_size': self.hidden_size,
-            'n_layers': self.n_layers
+            'n_layers': self.n_layers,
+            'use_softexp': self.use_softexp
         })
     
     def _train_iter(self, x, y):
