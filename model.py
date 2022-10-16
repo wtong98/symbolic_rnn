@@ -193,12 +193,13 @@ class BinaryAdditionDataset(Dataset):
 
 
 class Model(nn.Module):
-    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0) -> None:
+    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0, l1_weight=0) -> None:
         super().__init__()
         self.loss_func = loss_func
         self.vocab_size=vocab_size
         self.end_idx = end_idx
         self.padding_idx = padding_idx
+        self.l1_weight = l1_weight
 
         self.ewc_weight = ewc_weight
         self.use_ewc = False
@@ -207,18 +208,23 @@ class Model(nn.Module):
 
     def loss(self, logits, targets):
         ewc_loss = 0
+        l1_loss = 0
         loss = 0
 
         if self.use_ewc:
             curr_params = torch.concat([p.flatten() for p in self.parameters()])
             ewc_loss = torch.sum(self.fisher_info * (curr_params - self.old_params) ** 2)
+        
+        if self.l1_weight > 0:
+            params = self.collect_reg_params()
+            l1_loss = torch.norm(params, p=1) / len(params)
 
         if self.loss_func == 'bce':
             loss = nn.functional.cross_entropy(logits, targets) 
         else:
             loss = nn.functional.mse_loss(logits, targets.unsqueeze(1))
         
-        return loss + self.ewc_weight * ewc_loss
+        return loss + self.ewc_weight * ewc_loss + self.l1_weight * l1_loss
     
     def save(self, path, params):
         if type(path) == str:
@@ -247,6 +253,9 @@ class Model(nn.Module):
         raise NotImplementedError
     
     def evaluate(self, test_dl):
+        raise NotImplementedError
+    
+    def collect_reg_params(self):
         raise NotImplementedError
     
     def fix_ewc(self, train_dl):
@@ -797,6 +806,15 @@ class RnnClassifier(Model):
         tok_acc = acc.item()
 
         return loss, tok_acc, tok_acc
+    
+    def collect_reg_params(self):
+        params = [
+            self.embedding.weight,
+            *self.encoder_rnn.parameters(),
+            self.readout.weight
+        ]
+        params = torch.cat([p.view(-1) for p in params])
+        return params
 
 
 class RnnClassifierWithMLP(RnnClassifier):

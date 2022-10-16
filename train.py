@@ -247,7 +247,8 @@ model = RnnClassifier(
     hidden_size=256,
     vocab_size=6,
     nonlinearity='relu',
-    use_softexp=True,
+    use_softexp=False,
+    l1_weight=10,
     loss_func='mse').cuda()
 
 # model.load('save/hid100k_vargs3_nbits3')
@@ -452,7 +453,7 @@ print_test_case_direct(ds, model,
 
 
 # %%
-# model.save('save/relu_nbits3_nozeropad')
+model.save('save/interleaved_l1')
 
 # %%
 ### PLOT TRAJECTORIES THROUGH CELL SPACE
@@ -523,7 +524,7 @@ plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
 
 # %%
-model.save('save/relu_mse_interleaved_lin_interp')
+model.save('save/relu_mse_interleaved_linear_readout')
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE
