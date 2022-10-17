@@ -193,13 +193,18 @@ class BinaryAdditionDataset(Dataset):
 
 
 class Model(nn.Module):
-    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0, l1_weight=0) -> None:
+    def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0, l1_weight=0, optim=None, full_batch=False) -> None:
         super().__init__()
         self.loss_func = loss_func
         self.vocab_size=vocab_size
         self.end_idx = end_idx
         self.padding_idx = padding_idx
         self.l1_weight = l1_weight
+        self.full_batch = full_batch
+
+        self.optim = optim
+        if self.optim == None:
+            self.optim = Adam
 
         self.ewc_weight = ewc_weight
         self.use_ewc = False
@@ -284,21 +289,35 @@ class Model(nn.Module):
         self.fisher_info = torch.concat(self.fisher_info)
         self.use_ewc = True
     
-    def learn(self, n_epochs, train_dl, test_dl, eval_every=100, logging=True, **optim_args):
-        self.optimizer = Adam(self.parameters(), **optim_args)
+    def learn(self, n_epochs, train_dl, test_dl, eval_every=100, logging=True, eval_cb=None, **optim_args):
+        self.optimizer = self.optim(self.parameters(), **optim_args)
+        is_cuda = False
+        if next(self.parameters()).device != torch.device('cpu'):
+            is_cuda = True
 
         losses = {'train': [], 'test': [], 'tok_acc': [], 'arith_acc': []}
         running_loss = 0
         running_length = 0
 
         for e in range(n_epochs):
+            self.optimizer.zero_grad()
+
             for x, y in train_dl:
-                x = x.cuda()
-                y = y.cuda()
+                if is_cuda:
+                    x = x.cuda()
+                    y = y.cuda()
+
                 loss = self._train_iter(x, y)
+
+                if not self.full_batch:
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
 
                 running_loss += loss.item()
                 running_length += 1
+            
+            if self.full_batch:
+                self.optimizer.step()
 
             if (e+1) % eval_every == 0:
                 self.eval()
@@ -316,6 +335,9 @@ class Model(nn.Module):
                 running_loss = 0
                 running_length = 0
                 self.train()
+
+                if eval_cb != None:
+                    eval_cb(self)
         
         return losses
 
@@ -450,11 +472,9 @@ class Seq2SeqRnnModel(Model):
         })
     
     def _train_iter(self, x, y):
-        self.optimizer.zero_grad()
         logits, targets = self(x, y)
         loss = self.loss(logits, targets)
         loss.backward()
-        self.optimizer.step()
         return loss
     
     @torch.no_grad()
@@ -463,10 +483,12 @@ class Seq2SeqRnnModel(Model):
         total_correct = 0
         total_count = 0
         ds = test_dl.dataset
+        is_cuda = next(self.parameters).device != torch.device('cpu')
 
         for input_seq, output_seq in test_dl:
-            input_seq = input_seq.cuda()
-            output_seq = output_seq.cuda()
+            if is_cuda:
+                input_seq = input_seq.cuda()
+                output_seq = output_seq.cuda()
 
             logits, targets = self(input_seq, output_seq)
             all_preds.append(logits)
@@ -778,11 +800,9 @@ class RnnClassifier(Model):
         })
     
     def _train_iter(self, x, y):
-        self.optimizer.zero_grad()
         logits = self(x)
         loss = self.loss(logits, y)
         loss.backward()
-        self.optimizer.step()
         return loss
     
     @torch.no_grad()
