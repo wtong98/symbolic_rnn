@@ -71,6 +71,23 @@ class RnnClassifier3D(RnnClassifier):
 
         if fix_emb:
             pass
+    
+    @torch.no_grad()
+    def print_params(self):
+        w = self.encoder_rnn.weight_hh_l0.data.numpy()
+        emb = self.encoder_rnn.weight_ih_l0 @ self.embedding.weight.T \
+            + torch.tile(self.encoder_rnn.bias_ih_l0.reshape(-1, 1), (1, 5)) \
+            + torch.tile(self.encoder_rnn.bias_hh_l0.reshape(-1, 1), (1, 5))
+
+        w_r = self.readout.weight.data.numpy()
+        b_r = self.readout.bias.data.numpy()
+
+        print('emb_0', emb[:,0].numpy())
+        print('emb_1', emb[:,1].numpy())
+        print('emb_+', emb[:,2].numpy())
+        print('w', w)
+        print('w_r', w_r)
+        print('b_r', b_r)
 
 
 
@@ -126,7 +143,9 @@ for (x, y), _ in list(zip(ds_all, range(300))):
 # <codecell>
 # model = RnnClassifier1D(fix_emb=False, optim=torch.optim.SGD, full_batch=True).cuda()
 # model = RnnClassifier1D(fix_emb=False, optim=torch.optim.Adam, full_batch=False).cuda()
-model = RnnClassifier1D(fix_emb=False, optim=torch.optim.Adam, full_batch=False).cuda()
+model = RnnClassifier3D(fix_emb=False, optim=torch.optim.Adam, full_batch=False)
+model.print_params()
+model.cuda()
 
 
 # <codecell>
