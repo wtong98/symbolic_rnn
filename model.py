@@ -705,11 +705,11 @@ class RnnClassifier(Model):
         else:
             raise ValueError('loss_func should be either "bce" or "mse"')
 
-    def encode(self, input_seq):
+    def encode(self, input_seq, *enc_args):
         input_lens = torch.sum(input_seq != self.padding_idx, dim=-1)
         input_emb = self.embedding(input_seq)
         input_packed = pack_padded_sequence(input_emb, input_lens.cpu(), batch_first=True, enforce_sorted=False)
-        _, enc_h = self.encoder_rnn(input_packed)
+        _, enc_h = self.encoder_rnn(input_packed, *enc_args)
 
         if type(enc_h) == tuple:
             enc_h = enc_h[0]
@@ -1012,7 +1012,7 @@ class LinearRNN(nn.Module):
 
         hidden = torch.zeros(batch_sizes[0], self.hidden_size).to(dev)
         for b, size in zip(batches, batch_sizes):
-            hidden_chunk = torch.tanh(self.ih(b) + self.hh(hidden[:size,...]))
+            hidden_chunk = self.ih(b) + self.hh(hidden[:size,...])
             hidden = torch.cat((hidden_chunk, hidden[size:,...]), dim=0)
 
         hidden = hidden[unsort_idxs]
