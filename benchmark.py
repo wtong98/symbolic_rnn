@@ -3,6 +3,8 @@ Measure performance across different models
 """
 
 # <codecell>
+import pickle
+
 from collections import defaultdict, namedtuple
 from pathlib import Path
 from re import sub
@@ -18,17 +20,17 @@ from model import *
 
 cached_ds = {}
 
-def test_long_sequence(model, n_start_args=4, n_end_args=10, max_value=9):
+def test_long_sequence(model, n_start_args=4, n_end_args=10, max_value=21, add_noop=True):
     global cached_ds
 
     n_args = list(range(n_start_args, n_end_args+1))
     all_accs = []
 
     for n in tqdm(n_args):
-        if n in cached_ds:
-            dl = cached_ds[n]
+        if (n, add_noop) in cached_ds:
+            dl = cached_ds[(n, add_noop)]
         else:
-            ds = BinaryAdditionDataset(n_bits=2, max_args=n, onehot_out=True, max_only=True, add_noop=True, max_noop=5, max_noop_only=True, filter_={'max_value': max_value})
+            ds = BinaryAdditionDataset(n_bits=3, max_args=n, onehot_out=True, max_only=True, add_noop=add_noop, max_noop=5, max_noop_only=True, filter_={'max_value': max_value})
             dl = DataLoader(ds, batch_size=32, pin_memory=True, num_workers=0, collate_fn=ds.pad_collate)
             cached_ds[n] = dl
 
@@ -76,31 +78,40 @@ def make_plots(losses, filename=None, eval_every=100):
 
 
 # <codecell>
-n_iter = 1
+n_iter = 5
 arch_width = 256
-max_value = 9
-n_end_args = 10
-n_epochs = 10000
-eval_every = 100
+emb_width = 32
+max_value = 21
+n_end_args = 7
+n_epochs = 1000
+eval_every = 200
 optim_lr = 1e-4
 
-fig_dir = Path('save/fig/benchmark_noop')
+fig_dir = Path('save/fig/benchmark_noop_cosyne')
 if not fig_dir.exists():
     fig_dir.mkdir(parents=True)
 
-TestCase = namedtuple('TestCase', ['name', 'model', 'ds', 'n_epochs'])
+TestCase = namedtuple('TestCase', ['name', 'model', 'ds', 'n_epochs', 'test_params'])
 
 def make_cases():
     cases = [
         TestCase(name='Full dataset',
-                model=RnnClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
-                n_epochs=n_epochs),
+                model=RnnClassifier(max_value, hidden_size=arch_width, embedding_size=emb_width), 
+                ds=BinaryAdditionDataset(n_bits=3, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=False),
+                n_epochs=n_epochs,
+                test_params={}),
 
         TestCase(name='Max args only',
-                model=RnnClassifier(max_value, hidden_size=arch_width), 
-                ds=BinaryAdditionDataset(n_bits=2, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
-                n_epochs=n_epochs),
+                model=RnnClassifier(max_value, hidden_size=arch_width, embedding_size=emb_width), 
+                ds=BinaryAdditionDataset(n_bits=3, onehot_out=True, add_noop=True, max_noop=5, max_args=3, max_only=True),
+                n_epochs=n_epochs,
+                test_params={}),
+
+        TestCase(name='No noops',
+                model=RnnClassifier(max_value, hidden_size=arch_width, embedding_size=emb_width), 
+                ds=BinaryAdditionDataset(n_bits=3, onehot_out=True, add_noop=False, max_noop=0, max_args=3, max_only=False),
+                n_epochs=n_epochs,
+                test_params={'add_noop': False}),
 
         # TestCase(name='Flat RNN Reservoir (full dataset)',
         #         model=ReservoirClassifier(max_value, hidden_size=arch_width), 
@@ -137,17 +148,24 @@ for i in tqdm(range(n_iter)):
         ds = case.ds
         dl = DataLoader(ds, batch_size=32, pin_memory=True, num_workers=0, collate_fn=ds.pad_collate)
         losses = case.model.learn(case.n_epochs, dl, dl, logging=False, lr=optim_lr, eval_every=eval_every)
-        make_plots(losses, f'{str(fig_dir)}/{compress_str(case.name)}-{i}.png', eval_every=eval_every)
+        # make_plots(losses, f'{str(fig_dir)}/{compress_str(case.name)}-{i}.png', eval_every=eval_every)
 
-        accs, n_args = test_long_sequence(case.model, n_end_args=n_end_args)
+        accs, n_args = test_long_sequence(case.model, n_start_args=1, n_end_args=n_end_args, **case.test_params)
         results[case.name].append(accs)
         
 
 # <codecell>
+# TODO: save cases
+with open('benchmark_out.pk', 'wb') as fp:
+    pickle.dump(results, fp)
+
+# <codecell>
 bw = 0.2
 # offsets = bw * np.array([-3, -2, -1, 0, 1, 2]) + bw / 2
-offsets = bw * np.array([-1, 0]) + bw / 2
-xs = np.arange(n_end_args - 3)
+offsets = bw * np.array([-1, 0, 1]) + bw / 2
+xs = np.arange(n_end_args)
+
+plt.gcf().set_size_inches(7, 3.5)
 
 for (name, result), offset in zip(results.items(), offsets):
     result = np.array(result)
@@ -156,12 +174,15 @@ for (name, result), offset in zip(results.items(), offsets):
 
     plt.bar(xs - offset, means, bw, yerr=serr, label=name)
 
-plt.xticks(xs, xs+4)
+plt.axvline(x=2.4, color='k', linestyle='dashed')
+plt.annotate('Test split', (2.45, 0.98))
+
+plt.xticks(xs, xs + 1)
 plt.xlabel('Max number of args')
 plt.ylabel('Accuracy')
 
 plt.legend()
-plt.savefig(str(fig_dir / 'comparison.png'))
-plt.clf()
+plt.savefig(str(fig_dir / 'comparison.svg'))
+# plt.clf()
 
 # %%

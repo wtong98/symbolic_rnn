@@ -525,7 +525,7 @@ plt.legend()
 # plt.savefig('save/fig/micro_128k_traj_2.png')
 
 # %%
-model.save('save/relu_mse_interleaved_linear_readout')
+model.save('save/relu_mse_interleaved')
 
 # %%
 ### PLOT CLOUD OF FINAL CELL STATES BY VALUE

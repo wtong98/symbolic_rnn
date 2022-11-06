@@ -3,11 +3,13 @@ Generate plots for COSYNE
 """
 
 # <codecell>
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 from sklearn.decomposition import PCA
 import torch
+from tqdm import tqdm
 
 import sys
 sys.path.append('../')
@@ -136,3 +138,117 @@ def optim(model, seq, h_init_idx, tok_idx):
         res = minimize(q, h_start, method='bfgs', jac=jac)
 
     return res
+
+def find_crit_points(model, all_seqs):
+    all_results = []
+    for seq in all_seqs:
+        curr_results = []
+        print('Compute seq:', seq)
+        for i in tqdm(range(len(seq))):
+            res = optim(model, seq, i, 5)
+            curr_results.append(res)
+        all_results.append(curr_results)
+    
+    return all_results
+
+def plot_seq(model, all_seqs, all_results=None, save_path=None):
+    all_trajs = []
+    all_labs = []
+    if all_results == None:
+        all_results = [[]]  # TODO: temporary
+
+    W = model.encoder_rnn.weight_hh_l0.data.numpy()
+    pca = PCA(n_components=2)
+    pca.fit(np.linalg.matrix_power(W, 1))
+
+    for seq in all_seqs:
+        seq = torch.tensor(seq)
+        with torch.no_grad():
+            info = model.trace(seq)
+
+        traj = torch.cat(info['enc']['hidden'], axis=-1)
+        labs = model.readout(traj.T).argmax(axis=-1)
+        all_labs.append(labs.tolist())
+
+        traj = traj.numpy()
+        traj = pca.transform(traj.T).T
+        all_trajs.append(traj)
+
+    plt.gcf().set_size_inches(6, 6)
+    lss = ['-', ':']
+    for seq, traj, labs, result, ls in zip(all_seqs, all_trajs, all_labs, all_results, lss):
+        # traj = pca.transform(traj.T).T
+        traj = np.concatenate((np.zeros((2, 1)), traj), axis=-1)
+        # jit_x = np.random.uniform(-1, 1) * 0.05
+        # jit_y = np.random.uniform(-1, 1) * 0.05
+        jit_x = 0
+        jit_y = 0
+
+        diffs = traj[:,1:] - traj[:,:-1]
+        for i, point, lab, diff in zip(range(len(seq)), traj.T, labs, diffs.T):
+            if seq[i] == 5:
+                color = 'C0'
+            elif seq[i] == 1:
+                color = 'C1'
+            elif seq[i] == 0:
+                color = 'C4'
+            else:
+                color = 'C2'
+            
+            point[0] += jit_x
+            point[1] += jit_y
+            plt.arrow(*point, *diff, color=color, alpha=0.8, length_includes_head=True, width=0.03, head_width=0.25, head_length=0.2)
+            # plt.annotate(lab, point + 0.1)
+        
+        # plt.plot(traj[0,:] + jit_x, traj[1,:] + jit_y, 'o-', label=str(seq), alpha=0.8)
+
+
+        for i, res in enumerate(result):
+            if res['success']:
+                crit_pt = pca.transform(res['x'].reshape(1, -1))
+                plt.plot(crit_pt[0,0], crit_pt[0,1], 'ro', markersize=7, alpha=0.6)
+
+                label = model.readout(torch.tensor(res['x'].reshape(1, -1)).float()).argmax(dim=-1)
+                if label.item() <= 8:
+                    offset = 0.15
+                else:
+                    offset = np.array([-0.35, 0.25]).reshape(2, 1)
+
+                plt.annotate(label.item(), crit_pt.T + offset, color='red')
+
+                # orig_pt = traj[:,i]
+                # plt.arrow(orig_pt[0], orig_pt[1], crit_pt[0,0] - orig_pt[0], crit_pt[0,1] - orig_pt[1], alpha=0.2)
+
+    plt.annotate('Start', (0.12, -0.1), color='red')
+    plt.axis('off')
+
+
+    handles = [
+        mpatches.Patch(color='C0', label='No-Op'),
+        mpatches.Patch(color='C1', label='1'),
+        mpatches.Patch(color='C4', label='0'),
+        mpatches.Patch(color='C2', label='+'),
+        mpatches.Patch(color='red', label='Crit. Pt')
+    ]
+
+    # plt.legend(handles=handles)
+    if save_path:
+        plt.savefig(save_path)
+
+
+# <codecell>
+model = RnnClassifier(0)
+model.load('save/hid100k_vargs3_nbits3')
+all_seqs = [[1,5,5,5] + 15 * [2,1,5,5,5]]
+all_results = find_crit_points(model, all_seqs)
+plot_seq(model, all_seqs, all_results, save_path='viz/cosyne_fig/traj_full.svg')
+
+# <codecell>
+model = RnnClassifier(0)
+model.load('save/skip_6')
+all_seqs = [[1,1,0,5,5,5,2,1,5,5,5]]
+all_results = find_crit_points(model, all_seqs)
+plot_seq(model, all_seqs, all_results, save_path='viz/cosyne_fig/traj_skip_6.svg')
+
+# <codecell>
+### 1D RNN loss landscape

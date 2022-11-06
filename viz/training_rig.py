@@ -3,6 +3,7 @@ Plotting generalization trend of models on single argument datasets
 """
 
 # <codecell>
+import pickle
 from collections import namedtuple
 
 import matplotlib.pyplot as plt
@@ -102,18 +103,23 @@ for c in case_set:
     results = run_case(c.model_params, c.ds_params_set, interleaved=c.is_interleaved)
     c.results.extend(results)
 
+# <codecell>
+# TODO: save out-data
+with open('cosyne_fig/zeros_bench_out.pk', 'wb') as fp:
+    pickle.dump(case_set, fp)
+
 # %%
 xs = np.arange(21)
 ys = 2 ** xs
 
-plt.gcf().set_size_inches(8, 6)
+plt.gcf().set_size_inches(5.5, 3.8)
 
 plt.plot(xs, ys, 'o--', color='black', label='True')
 plt.xticks(xs[::2])
-plt.axvline(x=7, color='red')
-plt.axvline(x=2, color='magenta')
-# plt.annotate('train', (5, 2))
-# plt.annotate('test', (7.5, 2))
+plt.axvline(x=7, color='red', alpha=0.8)
+plt.axvline(x=2, color='magenta', alpha=0.8)
+plt.annotate('Full dataset', (2.2, 0.6))
+plt.annotate('Single-args', (7.2, 0.6))
 
 for c in case_set:
     plt.plot(xs, c.results, 'o--', label=c.name, alpha=0.6)
@@ -123,6 +129,6 @@ plt.legend()
 plt.xlabel('Number of zeros')
 plt.ylabel('Numeric value')
 
-plt.savefig('../save/fig/zeros_extrapolation.png')
+plt.savefig('cosyne_fig/zeros_extrapolation.svg')
 
 # %%
