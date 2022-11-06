@@ -27,6 +27,7 @@ class BinaryAdditionDataset(Dataset):
         """
         filter = {
             'max_value': max value representable by expression
+            'min_value': min value representable by expression
             'in_args': skip any expression with these input args
             'out_args': skip any expression with these output args
         }
@@ -44,6 +45,7 @@ class BinaryAdditionDataset(Dataset):
 
         self.filter = {
             'max_value': np.inf,
+            'min_value': -np.inf,
             'in_args': [],
             'out_args': []
         }
@@ -107,6 +109,8 @@ class BinaryAdditionDataset(Dataset):
                     
             out_val = np.sum(in_args)
             if self.filter['max_value'] < out_val:
+                continue
+            if self.filter['min_value'] > out_val:
                 continue
             if out_val in self.filter['out_args']:
                 continue
@@ -295,7 +299,7 @@ class Model(nn.Module):
         if next(self.parameters()).device != torch.device('cpu'):
             is_cuda = True
 
-        losses = {'train': [], 'test': [], 'tok_acc': [], 'arith_acc': []}
+        losses = {'train': [], 'test': [], 'train_acc': [], 'test_acc': []}
         running_loss = 0
         running_length = 0
 
@@ -322,15 +326,16 @@ class Model(nn.Module):
             if (e+1) % eval_every == 0:
                 self.eval()
                 curr_loss = running_loss / running_length
-                test_loss, test_tok_acc, test_arith_acc = self.evaluate(test_dl)
+                train_loss, train_acc, _ = self.evaluate(train_dl)
+                test_loss, test_acc, _ = self.evaluate(test_dl)
 
                 if logging:
-                    print(f'Epoch: {e+1}   train_loss: {curr_loss:.4f}   test_loss: {test_loss:.4f}   tok_acc: {test_tok_acc:.4f}   arith_acc: {test_arith_acc:.4f} ')
+                    print(f'Epoch: {e+1}   running_loss: {curr_loss:.4f}    train_loss: {train_loss:.4f}   test_loss: {test_loss:.4f}   train_acc: {train_acc:.4f}   test_acc: {test_acc:.4f} ')
 
-                losses['train'].append(curr_loss)
+                losses['train'].append(train_loss)
                 losses['test'].append(test_loss)
-                losses['tok_acc'].append(test_tok_acc)
-                losses['arith_acc'].append(test_arith_acc)
+                losses['train_acc'].append(train_acc)
+                losses['test_acc'].append(test_acc)
 
                 running_loss = 0
                 running_length = 0
@@ -820,11 +825,17 @@ class RnnClassifier(Model):
         logits = torch.cat(all_preds, dim=0)
         targets = torch.cat(all_targs, dim=0)
 
-        preds = torch.argmax(logits, dim=-1)
-        acc = torch.mean((preds == targets).type(torch.FloatTensor))
+        
         loss = self.loss(logits, targets).item()
-        tok_acc = acc.item()
+        acc = None
+        if self.loss_func == 'mse':
+            diffs = (logits.flatten() - targets) ** 2
+            acc = torch.mean((diffs < 1).type(torch.FloatTensor))
+        else:
+            preds = torch.argmax(logits, dim=-1)
+            acc = torch.mean((preds == targets).type(torch.FloatTensor))
 
+        tok_acc = acc.item()
         return loss, tok_acc, tok_acc
     
     def collect_reg_params(self):

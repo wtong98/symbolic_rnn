@@ -93,7 +93,7 @@ class RNNWithFixedWeights(nn.Module):
 
 
 class RnnClassifier3D(RnnClassifier):
-    def __init__(self, fix_emb=False, **kwargs) -> None:
+    def __init__(self, fix_emb=False, w1=0, w2=0, **kwargs) -> None:
         nonlinearity = 'relu'
         loss_func = 'mse'
         embedding_size=3
@@ -104,11 +104,11 @@ class RnnClassifier3D(RnnClassifier):
 
         if fix_emb:
             self.w1 = torch.nn.Parameter(
-                torch.tensor([-2.]).float(), requires_grad=True
+                torch.tensor([w1]).float(), requires_grad=True
             )
 
             self.w2 = torch.nn.Parameter(
-                torch.tensor([-1.]).float(), requires_grad=True
+                torch.tensor([w2]).float(), requires_grad=True
             )
 
             self.encoder_rnn = RNNWithFixedWeights()
@@ -206,6 +206,15 @@ ds_args_only = BinaryAdditionDataset(n_bits=7,
                            use_zero_pad=True,
                            float_labels=True)
 
+ds_args_only_test = BinaryAdditionDataset(n_bits=8, 
+                           onehot_out=True, 
+                           max_args=1, 
+                           add_noop=False,
+                           use_zero_pad=True,
+                           float_labels=True,
+                           filter_={'min_value':128})
+
+
 ds_mini = BinaryAdditionDataset(n_bits=2, 
                            onehot_out=True, 
                            max_args=2, 
@@ -213,37 +222,52 @@ ds_mini = BinaryAdditionDataset(n_bits=2,
                            use_zero_pad=True,
                            float_labels=True)
 
-def make_dl(ds):
+def make_dl(ds, ds_test=None):
     train_dl = DataLoader(ds, batch_size=32, shuffle=True, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
-    test_dl = DataLoader(ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    test_dl = DataLoader(ds_test if ds_test != None else ds, batch_size=32, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    
     return train_dl, test_dl
 
 # ds_all = ConcatDataset([ds_args_only, ds_full])
 # ds_all = ds_args_only
 ds_all = ds_mini
 ds_all.pad_collate = ds_args_only.pad_collate
-train_dl, test_dl = make_dl(ds_all)
+train_dl, test_dl = make_dl(ds_all, None)
 
 for (x, y), _ in list(zip(ds_all, range(300))):
     print(x.tolist(), y.item())
 
+# print('TEST---')
+# for (x, y), _ in list(zip(ds_args_only_test, range(300))):
+#     print(x.tolist(), y.item())
 # <codecell>
 # model = RnnClassifier1D(fix_emb=False, optim=torch.optim.SGD, full_batch=True).cuda()
-# model = RnnClassifier1D(fix_emb=True, optim=torch.optim.Adam, full_batch=False)
 model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, full_batch=False)
+# model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, full_batch=False)
 # model.print_params()
 model.cuda()
 # model.cpu()
 # out = model(torch.tensor([[1,2,1,1]]))
 
 # <codecell>
-traj = [(model.w1.item(), model.w2.item())]
+# traj = [(model.encoder_rnn.weight_hh_l0.item(), model.readout.weight.item())]
+model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=0, w2=-1, full_batch=False).cuda()
+traj_1 = [(model.w1.item(), model.w2.item())]
 def eval_cb(model):
-    traj.append((model.w1.item(), model.w2.item()))
+    # traj.append((model.encoder_rnn.weight_hh_l0.item(), model.readout.weight.item()))
+    traj_1.append((model.w1.item(), model.w2.item()))
 # eval_cb = None
 
-n_epochs = 50000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-4, eval_every=100, eval_cb=eval_cb)
+n_epochs = 7000
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb)
+
+print('new mojo')
+model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=-2, w2=-1, full_batch=False).cuda()
+traj_2 = [(model.w1.item(), model.w2.item())]
+def eval_cb2(model):
+    traj_2.append((model.w1.item(), model.w2.item()))
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb2)
+
 print('done!')
 
 # <codecell>
@@ -257,9 +281,10 @@ def make_plots(losses, filename=None, eval_every=100):
     axs[0].set_xlabel('Epoch')
     axs[0].set_ylabel('Loss')
     axs[0].legend()
+    # axs[0].set_yscale('log')
 
-    axs[1].plot(epochs, losses['tok_acc'], label='token-wise accuracy')
-    axs[1].plot(epochs, losses['arith_acc'], label='expression-wise accuracy')
+    axs[1].plot(epochs, losses['train_acc'], label='train acc')
+    axs[1].plot(epochs, losses['test_acc'], label='test acc')
     axs[1].set_xlabel('Epoch')
     axs[1].set_ylabel('Accuracy')
     axs[1].legend()
@@ -295,7 +320,7 @@ def relu(x): return np.maximum(x, 0)
 
 def build_model(w, w_r):
     embedding = {
-        0: -1,
+        0: 0,
         1: 1
     }
 
@@ -346,10 +371,13 @@ def build_model_3d(w_1, w_2):
         0: np.array([0,0,0]).reshape(-1, 1),
         1: np.array([1,0,0]).reshape(-1, 1),
         2: np.array([-300, 0, -300]).reshape(-1, 1),
+        # 2: np.array([w_1, 0, w_2]).reshape(-1, 1),
     }
 
     w = np.matrix(f'{w_1},0,0;,{w_2},1,-1;0,0,0')
     readout = np.array([w_2, 1, -1]).reshape(-1, 1)
+    # w = np.matrix(f'2,0,0;,1,1,-1;1,0,0')
+    # readout = np.array([1, 1, -1]).reshape(-1, 1)
 
     def predict(seq):
         h = np.zeros((3, 1))
@@ -391,22 +419,55 @@ z = []
 for x_, y_ in tqdm(zip(xx.ravel(), yy.ravel()), total=np.prod(xx.shape)):
     m = build_model_3d(x_, y_)
     z.append(get_loss_manual(m, ds_args_only, 2, 1))
+    # z.append(get_loss_manual(m, ds_args_only, -300, -300))
 
 z = np.array(z).reshape(xx.shape)
 
 # <codecell>
 # TODO: experiment with fixed embeddings for 3D model <-- STOPPED HERE
 plt.contourf(xx, yy, np.log(z), 100, vmin=0)
-plt.axvline(x=2, alpha=0.3, linestyle='dashed')
-plt.axhline(y=1, alpha=0.3, linestyle='dashed')
+plt.axvline(x=2, alpha=0.3, linestyle='dashed', color='black')
+plt.axhline(y=1, alpha=0.3, linestyle='dashed', color='black')
 plt.colorbar()
+plt.xlabel('Digit multiplier')
+plt.ylabel('Accumulator transfer')
 
-traj = np.array(traj)
-plt.plot(traj[:,0], traj[:,1], color='red')
+
+traj_1 = np.array(traj_1)
+traj_2 = np.array(traj_2)
+
+plt.plot(traj_1[:,0], traj_1[:,1], color='red')
+plt.plot(traj_2[:,0], traj_2[:,1], color='red')
+
+plt.savefig('../save/fig/3d_loss_landscape.png')
 
 # plt.xlim((1.5, 2.5))
 # plt.ylim((0.5, 1.5))
 
+# <codecell>
+### CAMERA-READY PLOTS
+fig, axs = plt.subplots(1, 2, figsize=(9, 3))
+
+mpb = axs[0].contourf(xx, yy, np.log(z), 100, vmin=0)
+axs[0].axvline(x=2, alpha=0.3, linestyle='dashed', color='black')
+axs[0].axhline(y=1, alpha=0.3, linestyle='dashed', color='black')
+fig.colorbar(mpb, ax=axs[0])
+
+axs[0].plot(traj[:,0], traj[:,1], color='red')
+axs[0].set_xlabel('w')
+axs[0].set_ylabel('w_r')
+
+epochs = np.arange(len(losses['train'])) * eval_every
+axs[1].plot(epochs, losses['train_acc'], label='train acc')
+axs[1].plot(epochs, losses['test_acc'], label='test acc')
+axs[1].set_xlabel('Epoch')
+axs[1].set_ylabel('Accuracy')
+axs[1].set_xlim(0, 4000)
+axs[1].legend()
+
+fig.tight_layout()
+
+plt.savefig('../save/fig/w_v_wr_1d_loss_landscape.png')
 
 
 # <codecell>

@@ -248,7 +248,7 @@ model = RnnClassifier(
     vocab_size=6,
     nonlinearity='relu',
     use_softexp=False,
-    l1_weight=10,
+    # l1_weight=10,
     loss_func='mse').cuda()
 
 # model.load('save/hid100k_vargs3_nbits3')
@@ -266,8 +266,9 @@ model = RnnClassifier(
 # n_epochs = 200
 # losses = model.learn(n_epochs, train_dl, test_dl, lr=5e-5, eval_every=100)
 
-ds_all = ConcatDataset([ds_args_only, ds_full])
-ds_all.pad_collate = ds_args_only.pad_collate
+# ds_all = ConcatDataset([ds_args_only, ds_full])
+# ds_all.pad_collate = ds_args_only.pad_collate
+ds_all = ds_full
 train_dl, test_dl = make_dl(ds_all)
 
 print(list(zip(ds_all, range(300))))
