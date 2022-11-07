@@ -108,21 +108,35 @@ for c in case_set:
 with open('cosyne_fig/zeros_bench_out.pk', 'wb') as fp:
     pickle.dump(case_set, fp)
 
+# <codecell>
+with open('cosyne_fig/zeros_bench_out.pk', 'rb') as fp:
+    case_set = pickle.load(fp)
+
 # %%
 xs = np.arange(21)
 ys = 2 ** xs
 
-plt.gcf().set_size_inches(5.5, 3.8)
+plt.gcf().set_size_inches(7, 4.3)
 
 plt.plot(xs, ys, 'o--', color='black', label='True')
 plt.xticks(xs[::2])
 plt.axvline(x=7, color='red', alpha=0.8)
 plt.axvline(x=2, color='magenta', alpha=0.8)
-plt.annotate('Full dataset', (2.2, 0.6))
-plt.annotate('Single-args', (7.2, 0.6))
+plt.annotate('Full split', (2.1, 150), color='magenta')
+plt.annotate('Single split', (7.2, 0.6), color='red')
 
-for c in case_set:
-    plt.plot(xs, c.results, 'o--', label=c.name, alpha=0.6)
+names = {i: case_set[i].name for i in range(len(case_set))}
+names[0] = 'Full'
+names[1] = 'Single'
+names[2] = 'Single, then full'
+names[3] = 'Full, then single'
+names[4] = 'Interleaved'
+
+for i, c in enumerate(case_set):
+    offset = 0
+    if i == 0:
+        offset = 2
+    plt.plot(xs, np.array(c.results) + offset, 'o--', label=names[i], alpha=0.6)
 
 plt.yscale('log', base=2)
 plt.legend()
