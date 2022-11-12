@@ -133,10 +133,10 @@ names[3] = 'Full, then single'
 names[4] = 'Interleaved'
 
 for i, c in enumerate(case_set):
-    offset = 0
+    offset = 1
     if i == 0:
-        offset = 2
-    plt.plot(xs, np.array(c.results) + offset, 'o--', label=names[i], alpha=0.6)
+        offset = 2 ** 0.5
+    plt.plot(xs, np.array(c.results) * offset, 'o--', label=names[i], alpha=0.6)
 
 plt.yscale('log', base=2)
 plt.legend()

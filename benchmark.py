@@ -87,6 +87,7 @@ n_epochs = 1000
 eval_every = 200
 optim_lr = 1e-4
 
+
 fig_dir = Path('save/fig/benchmark_noop_cosyne')
 if not fig_dir.exists():
     fig_dir.mkdir(parents=True)
@@ -160,29 +161,33 @@ with open('benchmark_out.pk', 'wb') as fp:
     pickle.dump(results, fp)
 
 # <codecell>
+with open('benchmark_out.pk', 'rb') as fp:
+    results = pickle.load(fp)
+# <codecell>
 bw = 0.2
 # offsets = bw * np.array([-3, -2, -1, 0, 1, 2]) + bw / 2
 offsets = bw * np.array([-1, 0, 1]) + bw / 2
 xs = np.arange(n_end_args)
 
-plt.gcf().set_size_inches(7, 3.5)
+plt.gcf().set_size_inches(7, 3)
+plt.ylim((0, 1.1))
 
 for (name, result), offset in zip(results.items(), offsets):
     result = np.array(result)
     means = np.mean(result, axis=0)
-    serr = np.std(result, axis=0) / np.sqrt(n_iter)
+    serr = 2 * np.std(result, axis=0) / np.sqrt(n_iter)
 
     plt.bar(xs - offset, means, bw, yerr=serr, label=name)
 
 plt.axvline(x=2.4, color='k', linestyle='dashed')
-plt.annotate('Test split', (2.45, 0.98))
+plt.annotate('Test split', (2.45, 1.0))
 
 plt.xticks(xs, xs + 1)
 plt.xlabel('Max number of args')
 plt.ylabel('Accuracy')
 
-plt.legend()
-plt.savefig(str(fig_dir / 'comparison.svg'))
+plt.legend(bbox_to_anchor=(0.7, 0.7))
+plt.savefig('viz/cosyne_fig/comparison.svg', bbox_inches='tight')
 # plt.clf()
 
 # %%

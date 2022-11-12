@@ -665,10 +665,10 @@ plt.ylabel('Accuracy')
 # plt.xlim(0, 1100)
 plt.legend()
 
-plt.plot((0,0), (0,0), color='k', label='Train')
-plt.plot((0,0), (0,0), color='k', linestyle='dashed', label='Test')
+plt.plot((0,0), (0,0), color='k', linestyle='dashed', label='Train')
+plt.plot((0,0), (0,0), color='k', label='Test')
 plt.legend()
 
 plt.tight_layout()
 
-plt.savefig('viz/cosyne_fig/rnn_3d_acc_plot.svg')
+plt.savefig('cosyne_fig/rnn_3d_acc_plot.svg')
