@@ -121,7 +121,7 @@ class BinaryAdditionDataset(Dataset):
         return all_examples
 
     # TODO: unify with _exhautive_enum
-    def args_to_tokens(self, *args, with_end=True, args_only=False):
+    def args_to_tokens(self, *args, with_end=False, args_only=False):
         answer = np.sum(args)
         if self.little_endian:
             in_str = '+'.join([f'{a:b}'[::-1] for a in args])
@@ -293,7 +293,7 @@ class Model(nn.Module):
         self.fisher_info = torch.concat(self.fisher_info)
         self.use_ewc = True
     
-    def learn(self, n_epochs, train_dl, test_dl, eval_every=100, logging=True, eval_cb=None, **optim_args):
+    def learn(self, n_epochs, train_dl, test_dl=None, eval_every=100, logging=True, eval_cb=None, **optim_args):
         self.optimizer = self.optim(self.parameters(), **optim_args)
         is_cuda = False
         if next(self.parameters()).device != torch.device('cpu'):
@@ -323,26 +323,27 @@ class Model(nn.Module):
             if self.full_batch:
                 self.optimizer.step()
 
-            if (e+1) % eval_every == 0:
-                self.eval()
-                curr_loss = running_loss / running_length
-                train_loss, train_acc, _ = self.evaluate(train_dl)
-                test_loss, test_acc, _ = self.evaluate(test_dl)
+            if test_dl:
+                if (e+1) % eval_every == 0:
+                    self.eval()
+                    curr_loss = running_loss / running_length
+                    train_loss, train_acc, _ = self.evaluate(train_dl)
+                    test_loss, test_acc, _ = self.evaluate(test_dl)
 
-                if logging:
-                    print(f'Epoch: {e+1}   running_loss: {curr_loss:.4f}    train_loss: {train_loss:.4f}   test_loss: {test_loss:.4f}   train_acc: {train_acc:.4f}   test_acc: {test_acc:.4f} ')
+                    if logging:
+                        print(f'Epoch: {e+1}   running_loss: {curr_loss:.4f}    train_loss: {train_loss:.4f}   test_loss: {test_loss:.4f}   train_acc: {train_acc:.4f}   test_acc: {test_acc:.4f} ')
 
-                losses['train'].append(train_loss)
-                losses['test'].append(test_loss)
-                losses['train_acc'].append(train_acc)
-                losses['test_acc'].append(test_acc)
+                    losses['train'].append(train_loss)
+                    losses['test'].append(test_loss)
+                    losses['train_acc'].append(train_acc)
+                    losses['test_acc'].append(test_acc)
 
-                running_loss = 0
-                running_length = 0
-                self.train()
+                    running_loss = 0
+                    running_length = 0
+                    self.train()
 
-                if eval_cb != None:
-                    eval_cb(self)
+                    if eval_cb != None:
+                        eval_cb(self)
         
         return losses
 

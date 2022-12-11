@@ -115,30 +115,33 @@ class RnnClassifier3D(RnnClassifier):
 
             self.embedding.weight = torch.nn.Parameter(
                 torch.tensor([[0,0,0],[1,0,0],[-500,0,-500],[-1,-1,-1], [-1,-1,-1]]).float().reshape(-1, 3), requires_grad=False)
-            
-            # self.encoder_rnn.weight_ih_l0 = torch.nn.Parameter(
-            #     torch.eye(3), requires_grad=False
-            # )
+        else:
+            self.encoder_rnn.weight_ih_l0 = torch.nn.Parameter(
+                torch.eye(3), requires_grad=True
+            )
 
-            # self.encoder_rnn.bias_ih_l0 = torch.nn.Parameter(
-            #     torch.zeros(3), requires_grad=False
-            # )
+            self.encoder_rnn.bias_ih_l0 = torch.nn.Parameter(
+                torch.zeros(3), requires_grad=True
+            )
 
-            # self.encoder_rnn.bias_hh_l0 = torch.nn.Parameter(
-            #     torch.zeros(3), requires_grad=False
-            # )
+            self.encoder_rnn.bias_hh_l0 = torch.nn.Parameter(
+                torch.zeros(3), requires_grad=True
+            )
 
-            # self.readout.bias = torch.nn.Parameter(
-            #     torch.zeros(1), requires_grad=False
-            # )
+            self.readout.bias = torch.nn.Parameter(
+                torch.zeros(1), requires_grad=True
+            )
 
-            # self.encoder_rnn.weight_hh_l0 = torch.nn.Parameter(
-            #     torch.tensor([[1.9,0.,0.],[1.,0.9,-1.],[1.,0.,0.]]), requires_grad=True
-            # )
+            self.encoder_rnn.weight_hh_l0 = torch.nn.Parameter(
+                torch.tensor([[1.9,0.,0.],[1.,1,-1.],[1.,0.,0.]]), requires_grad=True
+            )
 
-            # self.readout.weight = torch.nn.Parameter(
-            #     torch.tensor([1,1,-1]).float().reshape(1, -1), requires_grad=False
-            # )
+            self.readout.weight = torch.nn.Parameter(
+                torch.tensor([1,1,-1]).float().reshape(1, -1), requires_grad=True
+            )
+
+            self.embedding.weight = torch.nn.Parameter(
+                torch.tensor([[0,0,0],[1,0,0],[-500,0,-500],[-1,-1,-1], [-1,-1,-1]]).float().reshape(-1, 3), requires_grad=True)
 
     def forward(self, x):
         if self.fix_emb:
@@ -230,7 +233,7 @@ def make_dl(ds, ds_test=None):
 
 # ds_all = ConcatDataset([ds_args_only, ds_full])
 # ds_all = ds_args_only
-ds_all = ds_mini
+ds_all = ds_full
 ds_all.pad_collate = ds_args_only.pad_collate
 train_dl, test_dl = make_dl(ds_all, None)
 
@@ -242,7 +245,7 @@ for (x, y), _ in list(zip(ds_all, range(300))):
 #     print(x.tolist(), y.item())
 # <codecell>
 # model = RnnClassifier1D(fix_emb=False, optim=torch.optim.SGD, full_batch=True).cuda()
-model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, full_batch=False)
+model = RnnClassifier3D(fix_emb=False, optim=torch.optim.Adam, full_batch=False)
 # model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, full_batch=False)
 # model.print_params()
 model.cuda()
@@ -251,24 +254,25 @@ model.cuda()
 
 # <codecell>
 # traj = [(model.encoder_rnn.weight_hh_l0.item(), model.readout.weight.item())]
-model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=0, w2=-1, full_batch=False).cuda()
-traj_1 = [(model.w1.item(), model.w2.item())]
-def eval_cb(model):
+# model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=0, w2=-1, full_batch=False).cuda()
+# traj_1 = [(model.w1.item(), model.w2.item())]
+# def eval_cb(model):
     # traj.append((model.encoder_rnn.weight_hh_l0.item(), model.readout.weight.item()))
-    traj_1.append((model.w1.item(), model.w2.item()))
+    # traj_1.append((model.w1.item(), model.w2.item()))
 # eval_cb = None
 
 n_epochs = 7000
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb)
+# losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb)
+losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100)
 
-print('new mojo')
-model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=-2, w2=-1, full_batch=False).cuda()
-traj_2 = [(model.w1.item(), model.w2.item())]
-def eval_cb2(model):
-    traj_2.append((model.w1.item(), model.w2.item()))
-losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb2)
+# print('new mojo')
+# model = RnnClassifier3D(fix_emb=True, optim=torch.optim.Adam, w1=-2, w2=-1, full_batch=False).cuda()
+# traj_2 = [(model.w1.item(), model.w2.item())]
+# def eval_cb2(model):
+#     traj_2.append((model.w1.item(), model.w2.item()))
+# losses = model.learn(n_epochs, train_dl, test_dl, lr=1e-3, eval_every=100, eval_cb=eval_cb2)
 
-print('done!')
+# print('done!')
 
 # <codecell>
 eval_every = 100
