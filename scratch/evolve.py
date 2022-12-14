@@ -17,6 +17,34 @@ from tqdm import tqdm
 sys.path.append('../')
 from model import *
 
+sol_weights = torch.tensor([
+    # emb
+    0, 0, 0, 
+    1, 0, 0, 
+    -999, 0, -999, 
+
+    # rnn in
+    1, 0, 0, 
+    0, 1, 0,
+    0, 0, 1,
+
+    # rnn in bias
+    0, 0, 0,
+
+    # rnn recur
+    2, 0, 0,
+    1, 1, -1,
+    1, 0, 0,
+
+    # rnn recur bias
+    0, 0, 0,
+
+    # readout
+    1, 1, -1,
+
+    # readout bias
+    0
+]).double()
 
 class RnnClassifier3D(RnnClassifier):
     def __init__(self, weights, **kwargs) -> None:
@@ -98,17 +126,93 @@ def sample_example(n, arg_low=4, arg_high=7, length_rate=1.25):
     exs = [args_to_tok(e) for e in exs]
     return ds.pad_collate(exs)
 
-# TODO: add gradient signal to training process
-def run(weights, n_steps=10, n_train=32, n_test=32, cuda=False):
+def sample_arg(n, arg_low=0, arg_high=4):
+    n_bits = np.random.randint(arg_low, arg_high+1, size=n)
+    hi = 2 ** n_bits
+    lo = 2. ** (n_bits - 1)
+    lo[n_bits == 0] = 0
+    vals = np.random.randint(lo, hi)
+    return vals
+    
+@torch.no_grad()
+def evol_loss(model, n_test, verbose=False, **kwargs):
+    b_fac = 1 - check_b(model, 0) * check_b(model, 1)
+    vocab_fac = check_vocab(model, n_test, **kwargs)
+    sum_fac = check_sum(model, n_test, **kwargs)
+    
+    loss = b_fac * 1000 + 0.5 * vocab_fac + sum_fac
+
+    if verbose:
+        return {
+            'loss': loss,
+            'b_fac': b_fac,
+            'vocab_fac': vocab_fac,
+            'sum_fac': sum_fac
+        }
+
+    else:
+        return loss
+
+def check_b(model, b, atol=0.1):
+    pred = model(torch.tensor([[b]])).item()
+    return np.isclose(pred, b, atol=atol)
+
+@torch.no_grad()
+def check_vocab(model, n_test=32, **kwargs):
+    vals = sample_arg(n_test, **kwargs)
+    loss = 0
+
+    for b in (0, 1):
+        b_vals = 2 * vals + b
+        b_vals_out = np.stack((vals, vals, b * np.ones(n_test)), axis=1).astype('int')
+
+        exs_in = [args_to_tok([e]) for e in b_vals]
+        exs_in, _ = ds.pad_collate(exs_in)
+
+        exs_out = [args_to_tok(e) for e in b_vals_out]
+        exs_out, _ = ds.pad_collate(exs_out)
+
+        model_in = model(exs_in).flatten()
+        model_out = model(exs_out).flatten()
+
+        loss += torch.mean((model_in - model_out) ** 2)
+    
+    return loss
+
+@torch.no_grad()
+def check_sum(model, n_test=32, **kwargs):
+    loss = 0
+    for n_args in (2,):
+        vals = sample_arg(n_test * n_args, **kwargs)
+        vals = np.split(vals, n_args)
+        vals = np.stack(vals, axis=1)
+
+        exs_in = [args_to_tok(e) for e in vals]
+        exs_in, _ = ds.pad_collate(exs_in)
+
+        out = [[args_to_tok([e]) for e in vals[:,i]] for i in range(n_args)]
+        out = [ds.pad_collate(o)[0] for o in out]
+
+        model_in = model(exs_in).flatten()
+        model_out = torch.concat([model(ex) for ex in out], axis=1)
+        model_out = torch.sum(model_out, dim=1).flatten()
+
+        loss += torch.mean((model_in - model_out) ** 2)
+    
+    return loss
+
+
+def run(weights, n_steps=10, n_train=32, n_test=256, cuda=False):
     weights = torch.tensor(weights)
-    model = RnnClassifier3D(weights).float()
+    model = RnnClassifier3D(weights)
 
     if cuda:
         model.cuda()
 
-    model.train()
-    dl = DataLoader(ds, batch_size=n_train, pin_memory=cuda, collate_fn=ds.pad_collate)
-    model.learn(n_steps, dl, lr=1e-4)
+    # model.train()
+    # dl = DataLoader(ds, batch_size=n_train, pin_memory=cuda, collate_fn=ds.pad_collate)
+    # model.learn(n_steps, dl, lr=1e-4)
+
     # optimizer = model.optim(model.parameters(), lr=1e-3)
     # for _ in range(n_steps):
     #     x_train, y_train = sample_example(n_train, arg_low=0, arg_high=3)
@@ -124,13 +228,18 @@ def run(weights, n_steps=10, n_train=32, n_test=32, cuda=False):
         
     
     model.eval()
-    with torch.no_grad():
-        x_test, y_test = sample_example(n_test, arg_low=4, arg_high=6)
-        if cuda:
-            x_test = x_test.cuda()
-            y_test = y_test.cuda()
-        preds = model(x_test)
-        return torch.mean((preds - y_test) ** 2).item()
+    return evol_loss(model, n_test=n_test)
+    # with torch.no_grad():
+    #     x_test, y_test = sample_example(n_test, arg_low=4, arg_high=6)
+    #     if cuda:
+    #         x_test = x_test.cuda()
+    #         y_test = y_test.cuda()
+    #     preds = model(x_test)
+    #     # return torch.mean((preds.flatten() - y_test) ** 2).item()
+    #     # diffs = (preds.flatten() - y_test) ** 2
+    #     # return -torch.sum(diffs < 0.25)
+    #     return -torch.sum(torch.isclose(preds.flatten(), y_test.float(), atol=0.5))
+
 
 
 conv = []
@@ -142,18 +251,30 @@ def cb(xk, convergence):
 # <codecell>
 
 with torch.multiprocessing.Pool(16) as pool:
-    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=10, updating='deferred', callback=cb)
+    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=1000, updating='deferred', callback=cb)
 # res = cma.fmin(run, np.random.randn(37), sigma0=1, restarts=2)
+
+# <codecell>
+# TODO: need negative examples, successor function?
+model = RnnClassifier3D(torch.tensor(res.x))
+# dl = DataLoader(ds, batch_size=32, pin_memory=False, collate_fn=ds.pad_collate)
+# model.learn(20, dl, lr=1e-4)
+
+model(torch.tensor([[1, 2, 1, 0, 0, 0, 0, 0]]))
+
+evol_loss(model, verbose=True, n_test=256)
+# TODO: explore further, consider introducing GD again, how to encode/measure understanding of task?
+
 # %%
 run(np.random.randn(37))
 
 # <codecell>
-# %timeit run(np.random.randn(37), n_steps=20, cuda=False)
+%timeit run(np.random.randn(37), n_steps=0, n_test=512, cuda=False)
 
 
 # <codecell>
 weights = np.random.randn(37)
-n_steps = 1000
+n_steps = 0
 n_train = 32
 n_test = 32
 cuda = True
@@ -190,3 +311,4 @@ with torch.no_grad():
     out = torch.mean((preds - y_test) ** 2)
 
 out
+# %%

@@ -133,7 +133,7 @@ class RnnClassifier3D(RnnClassifier):
             )
 
             self.encoder_rnn.weight_hh_l0 = torch.nn.Parameter(
-                torch.tensor([[1.9,0.,0.],[1.,1,-1.],[1.,0.,0.]]), requires_grad=True
+                torch.tensor([[2,0.,0.],[1.,1,-1.],[1.,0.,0.]]), requires_grad=True
             )
 
             self.readout.weight = torch.nn.Parameter(
