@@ -5,6 +5,7 @@ author: William Tong (wtong@g.harvard.edu)
 """
 
 # <codecell>
+from collections import defaultdict
 import sys
 
 import cma
@@ -44,7 +45,7 @@ sol_weights = torch.tensor([
 
     # readout bias
     0
-]).double()
+]).float()
 
 class RnnClassifier3D(RnnClassifier):
     def __init__(self, weights, **kwargs) -> None:
@@ -136,26 +137,44 @@ def sample_arg(n, arg_low=0, arg_high=4):
     
 @torch.no_grad()
 def evol_loss(model, n_test, verbose=False, **kwargs):
-    b_fac = 1 - check_b(model, 0) * check_b(model, 1)
-    vocab_fac = check_vocab(model, n_test, **kwargs)
+    # b_fac = 1 - check_b(model, 0) * check_b(model, 1)
+    n_fac = check_n(model, 7, loss_penalty=5)
+    vocab_fac = check_vocab(model, n_test, arg_low=2, arg_high=5, **kwargs)
     sum_fac = check_sum(model, n_test, **kwargs)
+    ex_fac = check_examples(model, n_test)
+
+    l1_fac = np.sum([torch.sum(torch.abs(p)) for p in model.parameters()])
     
-    loss = b_fac * 1000 + 0.5 * vocab_fac + sum_fac
+    # loss = n_fac + 0.5 * vocab_fac + sum_fac + 2 * ex_fac
+    loss = n_fac + 2 * vocab_fac + 2 * ex_fac + 3 * l1_fac
 
     if verbose:
         return {
             'loss': loss,
-            'b_fac': b_fac,
+            'n_fac': n_fac,
+            # 'b_fac': b_fac,
             'vocab_fac': vocab_fac,
-            'sum_fac': sum_fac
+            'sum_fac': sum_fac,
+            'ex_fac': ex_fac,
+            'l1_fac': l1_fac
         }
 
     else:
         return loss
 
+@torch.no_grad()
 def check_b(model, b, atol=0.1):
     pred = model(torch.tensor([[b]])).item()
     return np.isclose(pred, b, atol=atol)
+
+@torch.no_grad()
+def check_n(model, n, atol=0.49, loss_penalty=25):
+    exs = [args_to_tok([i]) for i in range(n+1)]
+    x, y = ds.pad_collate(exs)
+    preds = model(x).flatten()
+    n_wrong = torch.sum(~torch.isclose(preds, y.float(), atol=atol))
+
+    return n_wrong * loss_penalty
 
 @torch.no_grad()
 def check_vocab(model, n_test=32, **kwargs):
@@ -201,10 +220,17 @@ def check_sum(model, n_test=32, **kwargs):
     
     return loss
 
+@torch.no_grad()
+def check_examples(model, n_test=32, atol=0.49, arg_low=0, arg_high=4, **kwargs):
+    x_test, y_test = sample_example(n_test, arg_low=arg_low, arg_high=arg_high, **kwargs)
+    preds = model(x_test)
+    # return torch.sum(~torch.isclose(preds.flatten(), y_test.float(), atol=atol))
+    return torch.mean((preds.flatten() - y_test) ** 2)
+
 
 def run(weights, n_steps=10, n_train=32, n_test=256, cuda=False):
     weights = torch.tensor(weights)
-    model = RnnClassifier3D(weights)
+    model = RnnClassifier3D(weights).float()
 
     if cuda:
         model.cuda()
@@ -243,27 +269,50 @@ def run(weights, n_steps=10, n_train=32, n_test=256, cuda=False):
 
 
 conv = []
+all_losses = defaultdict(list)
+
 def cb(xk, convergence):
     global conv
     conv.append(convergence)
     print('CONV', convergence)
+    if len(conv) % 10 == 0:
+        model = RnnClassifier3D(torch.tensor(xk)).float()
+        loss = evol_loss(model, n_test=256, verbose=True)
+        print('LOSS', loss)
+
+        for key, val in loss.items():
+            all_losses[key].append(val)
+        
+model = RnnClassifier3D(torch.randn(37))
+loss = evol_loss(model, 256, verbose=True)
+print(loss)
+
 
 # <codecell>
 
 with torch.multiprocessing.Pool(16) as pool:
-    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=1000, updating='deferred', callback=cb)
+    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=2000, updating='deferred', callback=cb)
 # res = cma.fmin(run, np.random.randn(37), sigma0=1, restarts=2)
 
 # <codecell>
+plt.plot(conv, label='Convergence')
+for key, val in all_losses.items():
+    val = np.array(val)
+    plt.plot(val, label='key')
+
+plt.show()
+# <codecell>
 # TODO: need negative examples, successor function?
-model = RnnClassifier3D(torch.tensor(res.x))
+model = RnnClassifier3D(torch.tensor(res.x)).float()
 # dl = DataLoader(ds, batch_size=32, pin_memory=False, collate_fn=ds.pad_collate)
 # model.learn(20, dl, lr=1e-4)
 
-model(torch.tensor([[1, 2, 1, 0, 0, 0, 0, 0]]))
+model(torch.tensor([[1, 0, 0,]]))
+# TODO: emphasize vocab <-- STOPPED HERE
 
 evol_loss(model, verbose=True, n_test=256)
 # TODO: explore further, consider introducing GD again, how to encode/measure understanding of task?
+
 
 # %%
 run(np.random.randn(37))
