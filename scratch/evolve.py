@@ -318,7 +318,7 @@ evol_loss(model, verbose=True, n_test=256)
 run(np.random.randn(37))
 
 # <codecell>
-%timeit run(np.random.randn(37), n_steps=0, n_test=512, cuda=False)
+# %timeit run(np.random.randn(37), n_steps=0, n_test=512, cuda=False)
 
 
 # <codecell>

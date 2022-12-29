@@ -30,6 +30,7 @@ class BinaryAdditionDataset(Dataset):
             'min_value': min value representable by expression
             'in_args': skip any expression with these input args
             'out_args': skip any expression with these output args
+            'n_bits': keep only examples with arguments of n_bits
         }
         """
         super().__init__()
@@ -72,7 +73,11 @@ class BinaryAdditionDataset(Dataset):
     
     def _exhaustive_enum(self, n_args):
         all_args = []
-        for i in (np.arange(self.n_bits) + 1):
+        idx_iter = np.arange(self.n_bits) + 1
+        if 'n_bits' in self.filter:
+            idx_iter = [self.filter['n_bits']]
+
+        for i in idx_iter:
             cart_args = i * [[0, 1]]
             args = itertools.product(*cart_args)
             all_args.extend(args)
@@ -293,7 +298,7 @@ class Model(nn.Module):
         self.fisher_info = torch.concat(self.fisher_info)
         self.use_ewc = True
     
-    def learn(self, n_epochs, train_dl, test_dl=None, eval_every=100, logging=True, eval_cb=None, **optim_args):
+    def learn(self, n_epochs, train_dl, test_dl=None, max_iters=np.inf,  eval_every=100, logging=True, eval_cb=None, **optim_args):
         self.optimizer = self.optim(self.parameters(), **optim_args)
         is_cuda = False
         if next(self.parameters()).device != torch.device('cpu'):
@@ -306,7 +311,10 @@ class Model(nn.Module):
         for e in range(n_epochs):
             self.optimizer.zero_grad()
 
-            for x, y in train_dl:
+            for i, (x, y) in enumerate(train_dl):
+                if i > max_iters:
+                    break
+
                 if is_cuda:
                     x = x.cuda()
                     y = y.cuda()
@@ -327,7 +335,8 @@ class Model(nn.Module):
                 if (e+1) % eval_every == 0:
                     self.eval()
                     curr_loss = running_loss / running_length
-                    train_loss, train_acc, _ = self.evaluate(train_dl)
+                    # train_loss, train_acc, _ = self.evaluate(train_dl)
+                    train_loss = train_acc = 0
                     test_loss, test_acc, _ = self.evaluate(test_dl)
 
                     if logging:
