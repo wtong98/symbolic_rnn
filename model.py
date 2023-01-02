@@ -305,10 +305,10 @@ class Model(nn.Module):
             is_cuda = True
 
         losses = {'train': [], 'test': [], 'train_acc': [], 'test_acc': []}
-        running_loss = 0
-        running_length = 0
 
         for e in range(n_epochs):
+            running_loss = 0
+            running_length = 0
             self.optimizer.zero_grad()
 
             for i, (x, y) in enumerate(train_dl):
