@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import differential_evolution
 import torch
+from torch.utils.data import IterableDataset
 from tqdm import tqdm
 
 sys.path.append('../')
@@ -46,6 +47,67 @@ sol_weights = torch.tensor([
     # readout bias
     0
 ]).float()
+
+
+class CurriculumDataset(IterableDataset):
+    def __init__(self, params, probs=None, max_noops=5) -> None:
+        self.params = params
+        self.probs = probs
+        self.max_noops = max_noops
+
+        self.end_token = '<END>'
+        self.pad_token = '<PAD>'
+        self.noop_token = '_'
+        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token, self.noop_token]
+        self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+
+        self.noop_idx = self.token_to_idx[self.noop_token]
+        self.plus_idx = self.token_to_idx['+']
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        idx = np.random.choice(len(self.params), p=self.probs)
+        n_bits, n_args = self.params[idx]
+        args = np.random.randint(2 ** n_bits, size=n_args)
+        return self.args_to_tok(args, n_bits)
+
+    def args_to_tok(self, args, max_bits):
+        toks = '+'.join([f'{a:b}'.zfill(max_bits) + np.random.randint(self.max_noops + 1) * self.noop_token for a in args])
+        toks = [self.token_to_idx[t] for t in toks]
+        return torch.tensor(toks), torch.tensor(np.sum(args)).float()
+
+    def pad_collate(self, batch):
+        xs, ys = zip(*batch)
+        pad_id = self.token_to_idx[self.pad_token]
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+        ys_out = torch.stack(ys)
+        return xs_out, ys_out
+
+
+class CurriculumDatasetTrunc(Dataset):
+    def __init__(self, ds, length=1000) -> None:
+        ex_iter = iter(ds)
+        self.examples = [next(ex_iter) for _ in range(length)]
+        self.len = length
+    
+    def __getitem__(self, idx):
+        return self.examples[idx]
+    
+    def __len__(self):
+        return self.len
+     
+
+def build_dl(max_bits=3, max_args=3, batch_size=32, **ds_kwargs):
+    params = [(i, j) for i in range(1, max_bits + 1) for j in range(1, max_args + 1)]
+    ds = CurriculumDataset(params, **ds_kwargs)
+    test_ds = CurriculumDatasetTrunc(ds, length=500)
+
+    train_dl = DataLoader(ds, batch_size=batch_size, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    test_dl = DataLoader(test_ds, batch_size=batch_size, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    return train_dl, test_dl
+
 
 class RnnClassifier3D(RnnClassifier):
     def __init__(self, weights, **kwargs) -> None:
@@ -138,15 +200,16 @@ def sample_arg(n, arg_low=0, arg_high=4):
 @torch.no_grad()
 def evol_loss(model, n_test, verbose=False, **kwargs):
     # b_fac = 1 - check_b(model, 0) * check_b(model, 1)
-    n_fac = check_n(model, 7, loss_penalty=5)
+    n_fac = check_n(model, 7, loss_penalty=10)
     vocab_fac = check_vocab(model, n_test, arg_low=2, arg_high=5, **kwargs)
     sum_fac = check_sum(model, n_test, **kwargs)
     ex_fac = check_examples(model, n_test)
 
     l1_fac = np.sum([torch.sum(torch.abs(p)) for p in model.parameters()])
     
-    # loss = n_fac + 0.5 * vocab_fac + sum_fac + 2 * ex_fac
-    loss = n_fac + 2 * vocab_fac + 2 * ex_fac + 3 * l1_fac
+    # loss = ex_fac
+    loss = n_fac + 0.5 * vocab_fac + sum_fac + 2 * ex_fac
+    # loss = n_fac + 2 * vocab_fac + 2 * ex_fac + 0 * l1_fac
 
     if verbose:
         return {
@@ -221,7 +284,7 @@ def check_sum(model, n_test=32, **kwargs):
     return loss
 
 @torch.no_grad()
-def check_examples(model, n_test=32, atol=0.49, arg_low=0, arg_high=4, **kwargs):
+def check_examples(model, n_test=32, atol=0.49, arg_low=0, arg_high=3, **kwargs):
     x_test, y_test = sample_example(n_test, arg_low=arg_low, arg_high=arg_high, **kwargs)
     preds = model(x_test)
     # return torch.sum(~torch.isclose(preds.flatten(), y_test.float(), atol=atol))
@@ -289,9 +352,10 @@ print(loss)
 
 
 # <codecell>
-
 with torch.multiprocessing.Pool(16) as pool:
-    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=2000, updating='deferred', callback=cb)
+    res = differential_evolution(run, [(-2.5, 2.5)] * 37, workers=pool.map, maxiter=1000, updating='deferred', callback=cb)
+
+print('done!')
 # res = cma.fmin(run, np.random.randn(37), sigma0=1, restarts=2)
 
 # <codecell>
@@ -307,7 +371,7 @@ model = RnnClassifier3D(torch.tensor(res.x)).float()
 # dl = DataLoader(ds, batch_size=32, pin_memory=False, collate_fn=ds.pad_collate)
 # model.learn(20, dl, lr=1e-4)
 
-model(torch.tensor([[1, 0, 0,]]))
+# model(torch.tensor([[1, 0, 0,]]))
 # TODO: emphasize vocab <-- STOPPED HERE
 
 evol_loss(model, verbose=True, n_test=256)
@@ -360,4 +424,9 @@ with torch.no_grad():
     out = torch.mean((preds - y_test) ** 2)
 
 out
+# %%
+### CONVERT TO STANDARD RNN CLASSIFIER
+model = RnnClassifier(0)
+model.load('save/evo/3bit')
+
 # %%
