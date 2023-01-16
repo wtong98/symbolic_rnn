@@ -24,7 +24,7 @@ class RnnClassifier3D(RnnClassifier):
         embedding_size = embedding_size
         hidden_size = hidden_size
         vocab_size = 6
-        super().__init__(0, n_layers=3, nonlinearity=nonlinearity, embedding_size=embedding_size, hidden_size=hidden_size, vocab_size=vocab_size, loss_func=loss_func, **kwargs)
+        super().__init__(0, n_layers=1, nonlinearity=nonlinearity, embedding_size=embedding_size, hidden_size=hidden_size, vocab_size=vocab_size, loss_func=loss_func, **kwargs)
 
     @torch.no_grad()
     def print_params(self):

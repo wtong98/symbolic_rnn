@@ -262,6 +262,7 @@ class Model(nn.Module):
         weights = torch.load(path / 'weights.pt', device)
         self.load_state_dict(weights)
         self.eval()
+        return self
     
     def _train_iter(self, x, y):
         raise NotImplementedError
