@@ -133,10 +133,9 @@ class RnnClassifierBinaryOut(RnnClassifier):
 
 
 # PLOT POINT CLOUDS
-def plot_point_cloud(model, title='', save_path=None, add_noop=True, n_plots=4, max_bits=3, max_args=3, modulo=np.inf, return_pca=False):
-    width = 4
+def plot_point_cloud(model, title='', save_path=None, add_noop=True, n_plots=4, max_bits=3, max_args=3, modulo=np.inf, return_pca=False, fig_width=4):
+    width = fig_width
     fig, axs = plt.subplots(1, n_plots, figsize=(n_plots * width, width))
-    # fig, axs = plt.subplots(4, 1, figsize=(2, 8))
     mpb = None
 
     # W = model.encoder_rnn.weight_hh_l0.data.numpy()
@@ -257,8 +256,9 @@ for case in tqdm(all_cases):
         case.mse += torch.mean((preds.flatten() - ys)**2).item() / n_batches
 
 
-# %%
 df = pd.DataFrame(all_cases)
+
+# <codecell>
 plot_df = df[(df['name'] == 'Evo 3bit') \
       | (df['name'] == 'Evo (custom) 3bit') \
       | (df['name'] == 'MSE 3bit')]
@@ -294,19 +294,66 @@ g.set(yscale='log')
 g.legend.set_title("")
 plt.savefig('fig/curr_mse_comparison.png')
 
+# <codecell>
+## FOR COSYNE: lengthwise generalization plot
+curr_df = plot_df[plot_df['n_bits'] == 3]
+g = sns.barplot(data=curr_df, x='n_args', y='acc', hue='name')
+g.legend().set_title('')
+
+# TODO: redo benchmarks with lengthwise and bitwise plots
+# TODO: include (max) eigenvalues in benchmarking runs
+# TODO: identify clean trajectory plot that shows stretching
+
+
 # %% PRINT EIGENVALUES
 with torch.no_grad():
     mod_1d = RnnClassifier(0).load('../save/1d_single')
     mod_3d = RnnClassifier(0).load('../save/3d_single')
     mod_256d = RnnClassifier(0).load('../save/256d_single')
+    mod_10bit = RnnClassifier(0).load('../save/256d_10bit')
 
     val_1d = mod_1d.encoder_rnn.weight_hh_l0.item()
     val_3d = np.abs(np.max(np.linalg.eigvals(mod_3d.encoder_rnn.weight_hh_l0.numpy())))
     val_256d = np.abs(np.max(np.linalg.eigvals(mod_256d.encoder_rnn.weight_hh_l0.numpy())))
+    val_10bit = np.abs(np.max(np.linalg.eigvals(mod_10bit.encoder_rnn.weight_hh_l0.numpy())))
 
     print('val_1d', val_1d)
     print('val_3d', val_3d)
     print('val_256d', val_256d)
+    print('val_10bit', val_10bit)
+
+    plt.bar([1,2,3,4], [val_1d, val_3d, val_256d, val_10bit])
+    plt.gca().set_xticks([1,2,3,4])
+    plt.gca().set_xticklabels(['RNN 1D', 'RNN 3D', 'RNN 256D', 'RNN 10bit'])
+    plt.ylabel('Max eigenvalue')
+    plt.savefig('fig/eig_comparison.png')
+    plt.clf()
+
+    xs = np.arange(20)
+    vals = [torch.tensor([[1] + x * [0]]) for x in xs]
+
+    pred_1d = [mod_1d(v).flatten().numpy() for v in vals]
+    pred_3d = [mod_3d(v).flatten().numpy() for v in vals]
+    pred_256d = [mod_256d(v).flatten().numpy() for v in vals]
+    pred_10bit = [mod_10bit(v).flatten().numpy() for v in vals]
+    true = [2 ** x for x in xs]
+
+    alpha = 0.6
+    plt.plot(xs, true, 'o--', color='black', label='True', alpha=alpha)
+    plt.plot(xs, pred_1d, 'o--', label='RNN 1D', alpha=alpha)
+    plt.plot(xs, pred_3d, 'o--', label='RNN 3D', alpha=alpha)
+    plt.plot(xs, pred_256d, 'o--', label='RNN 256D', alpha=alpha)
+    plt.plot(xs, pred_10bit, 'o--', label='RNN 10bit', alpha=alpha)
+
+    plt.yscale('log')
+    plt.legend()
+    plt.xlabel('# zeros')
+    plt.ylabel('Value')
+
+    plt.savefig('fig/zeros_comparison.png')
+    plt.clf()
+
+    
 
 
 # <codecell>
@@ -344,6 +391,12 @@ model = RnnClassifierBinaryOut().load('../save/256d_7bit_bin')
 plot_point_cloud(model, max_bits=3, save_path='fig/cloud_7bit_bin_max3bit', modulo=16)
 plot_point_cloud(model, max_bits=7, save_path='fig/cloud_7bit_bin_max7bit', modulo=16)
 plot_point_cloud(model, max_bits=10, save_path='fig/cloud_7bit_bin_max10bit', modulo=16)
+
+# <codecell>
+## FOR COSYNE
+model = RnnClassifierBinaryOut().load('../save/256d_7bit_bin')
+plt.rc('font', size=21)
+plot_point_cloud(model, max_bits=7, save_path='fig/cloud_7bit_bin_max7bit.svg', modulo=16, fig_width=3)
 
 # <codecell>
 # PLOT TRAJECTORIES
