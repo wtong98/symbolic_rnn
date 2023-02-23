@@ -153,10 +153,10 @@ def build_dl(max_bits=3, max_args=3, batch_size=32, **ds_kwargs):
     return train_dl, test_dl
 
 # <codecell>
-train_dl, test_dl = build_dl(max_bits=7, max_args=3, max_noops=5, batch_size=256)
+train_dl, test_dl = build_dl(max_bits=3, max_args=3, max_noops=5, batch_size=256)
 
 # <codecell>
-model = RnnClassifier3D(embedding_size=32, hidden_size=256).cuda()
+model = RnnClassifier3D(embedding_size=256, hidden_size=256).cuda()
 # model = RnnClassifierBinaryOut(n_places=4, embedding_size=32, hidden_size=256).cuda()
 losses = model.learn(50, train_dl, test_dl=test_dl, max_iters=5000, eval_every=1, lr=3e-5)
 

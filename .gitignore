@@ -9,3 +9,4 @@ __pycache__/
 *.dat
 *.pdf
 update_docs/
+tmp_models/

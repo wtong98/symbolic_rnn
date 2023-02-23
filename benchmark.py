@@ -3,6 +3,7 @@ Measure performance across different models
 """
 
 # <codecell>
+from dataclasses import dataclass
 import pickle
 
 from collections import defaultdict, namedtuple
@@ -11,15 +12,193 @@ from re import sub
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# <codecell>
-
 from model import *
 
-cached_ds = {}
+@dataclass
+class Case:
+    name: str
+    save_path: Path
+    max_n_bits_train: int
+    max_n_args_train: int
+    n_bits_test: int
+    n_args_test: int
+    max_iters: int = 5000
+    n_epochs: int = 5
+    max_noops: int = 5
+    acc: int = 0
+    is_bin: bool = False
+    embedding_size: int = 512
+    hidden_size: int = 512
+    is_mse: bool = False
+    max_arg: int = None
+    fix_noop: bool = False
 
+root = Path('tmp_models')
+
+def plot_losses(losses, filename=None, eval_every=100):
+    epochs = np.arange(len(losses['train'])) * eval_every
+    plt.plot(epochs, losses['train'], label='train loss')
+    plt.plot(epochs, losses['test'], label='test loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    if filename != None:
+        plt.savefig(filename)
+
+
+def build_dl(max_bits=3, max_args=3, batch_size=32, **ds_kwargs):
+    params = [(i, j) for i in range(1, max_bits + 1) for j in range(1, max_args + 1)]
+    ds = CurriculumDataset(params, **ds_kwargs)
+    test_ds = CurriculumDatasetTrunc(ds, length=500)
+
+    train_dl = DataLoader(ds, batch_size=batch_size, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    test_dl = DataLoader(test_ds, batch_size=batch_size, collate_fn=ds.pad_collate, num_workers=0, pin_memory=True)
+    return train_dl, test_dl
+
+
+def run_case(case: Case, n_batches=4, force_refresh=False, debug=False):
+    if case.is_bin:
+        model = RnnClassifierBinaryOut(n_places=4, embedding_size=case.embedding_size, hidden_size=case.hidden_size)
+    elif case.is_mse:
+        model = RnnClassifier(0, nonlinearity='relu', embedding_size=case.embedding_size, hidden_size=case.hidden_size, loss_func='mse')
+    else:
+        case.max_arg = (2 ** case.max_n_bits_train - 1) * case.max_n_args_train
+        model = RnnClassifier(case.max_arg, embedding_size=case.embedding_size, hidden_size=case.hidden_size)
+    
+    if Path(root / case.save_path).exists() and force_refresh == False:
+        model.load(root / case.save_path)
+    else:
+        model.cuda()
+        train_dl, test_dl = build_dl(max_bits=case.max_n_bits_train, max_args=case.max_n_args_train, max_noops=case.max_noops, batch_size=256)
+        losses = model.learn(case.n_epochs, train_dl, test_dl, max_iters=case.max_iters, eval_every=1, lr=5e-5)
+
+        save_path = Path(root / case.save_path)
+        if not save_path.exists():
+            save_path.mkdir(parents=True)
+
+        model.save(save_path)
+        plot_losses(losses, eval_every=1, filename=str(root / case.save_path / 'losses.png'))
+        plt.clf()
+    
+    if debug:
+        case.model = model
+    
+    # eval
+    model.cpu()
+    ds = CurriculumDataset(params=[(case.n_bits_test, case.n_args_test)], max_noops=case.max_noops, max_out=case.max_arg, fix_noop=case.fix_noop)
+    dl = DataLoader(ds, batch_size=256, num_workers=0, collate_fn=ds.pad_collate)
+    dl_iter = iter(dl)
+    for _ in range(n_batches):
+        xs, ys = next(dl_iter)
+        with torch.no_grad():
+            if case.is_bin:
+                preds = model.pretty_forward(xs)
+                ys %= 2 ** model.n_places
+            elif case.is_mse:
+                preds = model(xs)
+            else:
+                logits = model(xs)
+                preds = torch.argmax(logits, axis=1).float()
+
+        res = torch.isclose(preds.flatten(), ys, atol=0.5)
+
+        case.acc += torch.mean(res.float()).item() / n_batches
+
+
+# case = Case('test', save_path='test_mse', max_n_args_train=3, max_n_bits_train=7, n_bits_test=8, n_args_test=3, n_epochs=10, max_iters=5000, is_mse=True)
+# run_case(case, debug=True, force_refresh=False)
+# print('done!')
+
+# case
+
+# <codecell>
+max_bits = 10
+n_args = [1, 3]
+
+# TODO: prepare for cluster and run <-- STOPPED HERE
+n_epochs = 10
+n_iters = 4
+max_iters_per_epoch = 5000
+
+# n_epochs = 3
+# n_iters = 2
+# max_iters_per_epoch = 50
+
+all_cases = []
+for i in range(n_iters):
+    for n_bit in range(1, max_bits + 1):
+        for n_arg in n_args:
+            all_cases.extend([
+                Case('Bin 7bit', save_path=f'bin_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_bin=True),
+                Case('MSE 3bit', save_path=f'mse_3bit_{i}', max_n_args_train=3, max_n_bits_train=3, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                Case('MSE 7bit', save_path=f'mse_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                Case('MSE 7bit single', save_path=f'mse_7bit_single_{i}', max_n_args_train=1, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+            ])
+
+
+for case in tqdm(all_cases):
+    run_case(case)
+
+df = pd.DataFrame(all_cases)
+df.to_pickle(root / 'df.pkl')
+'''
+
+# <codecell>
+df = pd.read_pickle(root / 'df.pkl')
+
+# <codecell>
+### Single arg generalization
+# plot_df = df[~df['name'].str.contains('single')]
+plot_df = df
+plot_df = plot_df[plot_df['n_args_test'] == 1]
+g = sns.barplot(plot_df, x='n_bits_test', y='acc', hue='name')
+
+g.legend().set_title('')
+
+# <codecell>
+### Three arg generalization
+plot_df = df[~df['name'].str.contains('single')]
+plot_df = plot_df[plot_df['n_args_test'] == 3]
+g = sns.barplot(plot_df, x='n_bits_test', y='acc', hue='name')
+
+g.legend().set_title('')
+
+
+# <codecell>
+### Eigenvalues
+names = []
+max_eigvals = []
+
+for _, row in df.iloc[:4].iterrows():
+    if row['is_bin'] == True:
+        model = RnnClassifierBinaryOut()
+    else:
+        model = RnnClassifier(0)
+    
+    model.load(root / row['save_path'])
+    W = model.encoder_rnn.weight_hh_l0.detach()
+    eigvals = np.linalg.eigvals(W)
+    eigvals = eigvals[np.imag(eigvals) == 0]
+    max_eigval = np.real(np.max(eigvals))
+
+    names.append(row['name'])
+    max_eigvals.append(max_eigval)
+
+# <codecell>
+plt.bar(np.arange(4), max_eigvals, color=['green', 'red', 'red', 'red'])  # TODO: tune colors
+plt.xticks(np.arange(4))
+plt.gca().set_xticklabels(names)
+
+
+
+# <codecell>
+### OLD STUFF vvv
 def test_long_sequence(model, n_start_args=4, n_end_args=10, max_value=21, add_noop=True):
     global cached_ds
 
@@ -191,3 +370,4 @@ plt.savefig('viz/cosyne_fig/comparison.svg', bbox_inches='tight')
 # plt.clf()
 
 # %%
+'''

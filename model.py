@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, IterableDataset, DataLoader, random_split
 
 
 class BinaryAdditionDataset(Dataset):
@@ -201,6 +201,69 @@ class BinaryAdditionDataset(Dataset):
         return len(self.examples)
 
 
+class CurriculumDataset(IterableDataset):
+    def __init__(self, params, probs=None, max_noops=5, fix_noop=False, max_out=None) -> None:
+        self.params = params
+        self.probs = probs
+        self.max_noops = max_noops
+        self.fix_noop = fix_noop
+        self.max_out = max_out
+
+        self.end_token = '<END>'
+        self.pad_token = '<PAD>'
+        self.noop_token = '_'
+        self.idx_to_token = ['0', '1', '+', self.end_token, self.pad_token, self.noop_token]
+        self.token_to_idx = {tok: i for i, tok in enumerate(self.idx_to_token)}
+
+        self.noop_idx = self.token_to_idx[self.noop_token]
+        self.plus_idx = self.token_to_idx['+']
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        while True:
+            idx = np.random.choice(len(self.params), p=self.probs)
+            n_bits, n_args = self.params[idx]
+
+            upper = 2 ** n_bits if self.max_out == None else min(self.max_out + 1, 2 ** n_bits)
+            args = np.random.randint(upper, size=n_args)
+
+            if self.max_out == None or np.sum(args) <= self.max_out:
+                return self.args_to_tok(args, n_bits)
+    
+    def sn(self): # "sample noop"
+        if self.fix_noop:
+            return self.max_noops
+        else:
+            return np.random.randint(self.max_noops + 1)
+
+    def args_to_tok(self, args, max_bits):
+        toks = '+'.join([f'{a:b}'.zfill(max_bits) + self.sn() * self.noop_token for a in args])
+        toks = [self.token_to_idx[t] for t in toks]
+        return torch.tensor(toks), torch.tensor(np.sum(args)).float()
+
+    def pad_collate(self, batch):
+        xs, ys = zip(*batch)
+        pad_id = self.token_to_idx[self.pad_token]
+        xs_out = pad_sequence(xs, batch_first=True, padding_value=pad_id)
+        ys_out = torch.stack(ys)
+        return xs_out, ys_out
+
+
+class CurriculumDatasetTrunc(Dataset):
+    def __init__(self, ds, length=1000) -> None:
+        ex_iter = iter(ds)
+        self.examples = [next(ex_iter) for _ in range(length)]
+        self.len = length
+    
+    def __getitem__(self, idx):
+        return self.examples[idx]
+    
+    def __len__(self):
+        return self.len
+
+
 class Model(nn.Module):
     def __init__(self, loss_func='bce', vocab_size=6, end_idx=3, padding_idx=4, ewc_weight=0, l1_weight=0, optim=None, full_batch=False) -> None:
         super().__init__()
@@ -234,7 +297,7 @@ class Model(nn.Module):
             l1_loss = torch.norm(params, p=1) / len(params)
 
         if self.loss_func == 'bce':
-            loss = nn.functional.cross_entropy(logits, targets) 
+            loss = nn.functional.cross_entropy(logits, targets.long()) 
         else:
             loss = nn.functional.mse_loss(logits, targets.unsqueeze(1))
         
@@ -857,6 +920,54 @@ class RnnClassifier(Model):
         ]
         params = torch.cat([p.view(-1) for p in params])
         return params
+
+# TODO: unite with RnnClassifier proper
+class RnnClassifierBinaryOut(RnnClassifier):
+    def __init__(self, max_arg=0, n_places=4, nonlinearity='tanh', embedding_size=5, hidden_size=100, n_layers=1, **kwargs) -> None:
+        super().__init__(max_arg, nonlinearity=nonlinearity, 
+                         embedding_size=embedding_size, 
+                         hidden_size=hidden_size, 
+                         n_layers=n_layers, **kwargs)
+        
+        self.n_places = n_places
+        self.bitwise_mask = (2 ** torch.arange(n_places - 1, -1, -1)).long()
+        self.readout = nn.Linear(self.hidden_size, self.n_places)
+        self.loss = nn.BCEWithLogitsLoss()
+
+    def loss(self, logits, targets):
+        labels = self.dec_to_bin(targets)
+        return nn.functional.binary_cross_entropy_with_logits(logits, labels, reduction='mean')
+
+    # from: https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
+    @torch.no_grad()
+    def dec_to_bin(self, xs):
+        xs = xs.long()
+        return xs.unsqueeze(-1) \
+                 .bitwise_and(self.bitwise_mask) \
+                 .ne(0) \
+                 .float()
+    
+    @torch.no_grad()
+    def bin_to_dec(self, xs):
+        return torch.sum(self.bitwise_mask * xs, -1)
+    
+    @torch.no_grad()
+    def raw_to_dec(self, xs):
+        xs_bin = torch.sigmoid(xs).round()
+        return self.bin_to_dec(xs_bin)
+    
+    @torch.no_grad()
+    def pretty_forward(self, xs):
+        out = self(xs)
+        return self.raw_to_dec(out)
+    
+    def cuda(self, device = None):
+        self.bitwise_mask = self.bitwise_mask.cuda()
+        return super().cuda(device)
+    
+    def cpu(self):
+        self.bitwise_mask = self.bitwise_mask.cpu()
+        return super().cpu()
 
 
 class RnnClassifierWithMLP(RnnClassifier):
