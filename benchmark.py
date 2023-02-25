@@ -136,9 +136,11 @@ for i in range(n_iters):
         for n_arg in n_args:
             all_cases.extend([
                 Case('Bin 7bit', save_path=f'bin_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_bin=True),
-                Case('MSE 3bit', save_path=f'mse_3bit_{i}', max_n_args_train=3, max_n_bits_train=3, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
-                Case('MSE 7bit', save_path=f'mse_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
-                Case('MSE 7bit single', save_path=f'mse_7bit_single_{i}', max_n_args_train=1, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                # Case('MSE 3bit', save_path=f'mse_3bit_{i}', max_n_args_train=3, max_n_bits_train=3, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                # Case('MSE 7bit', save_path=f'mse_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                # Case('MSE 7bit single', save_path=f'mse_7bit_single_{i}', max_n_args_train=1, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=True),
+                Case('Cls 3bit', save_path=f'cls_3bit_{i}', max_n_args_train=3, max_n_bits_train=3, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=False),
+                Case('Cls 7bit', save_path=f'cls_7bit_{i}', max_n_args_train=3, max_n_bits_train=7, n_bits_test=n_bit, n_args_test=n_arg, n_epochs=n_epochs, max_iters=max_iters_per_epoch, is_mse=False),
             ])
 
 
@@ -146,8 +148,7 @@ for case in tqdm(all_cases):
     run_case(case)
 
 df = pd.DataFrame(all_cases)
-df.to_pickle(root / 'df.pkl')
-'''
+df.to_pickle(root / 'df_cls.pkl')
 
 # <codecell>
 df = pd.read_pickle(root / 'df.pkl')
@@ -155,7 +156,7 @@ df = pd.read_pickle(root / 'df.pkl')
 # <codecell>
 ### Single arg generalization
 # plot_df = df[~df['name'].str.contains('single')]
-plot_df = df
+plot_df = df[~df['name'].str.contains('single')]
 plot_df = plot_df[plot_df['n_args_test'] == 1]
 g = sns.barplot(plot_df, x='n_bits_test', y='acc', hue='name')
 
